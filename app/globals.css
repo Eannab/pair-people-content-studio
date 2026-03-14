@@ -1,0 +1,56 @@
+@import "tailwindcss";
+
+/* NOTE: Alte Haas Grotesk font file must be placed at /public/fonts/AlteHaasGroteskRegular.woff2 */
+@font-face {
+  font-family: "AlteHaasGrotesk";
+  src: url("/fonts/AlteHaasGroteskRegular.woff2") format("woff2");
+  font-weight: normal;
+  font-style: normal;
+  font-display: swap;
+}
+
+:root {
+  --background: #E7EDF3;
+  --foreground: #323B6A;
+}
+
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+}
+
+html,
+body {
+  height: 100%;
+  margin: 0;
+  padding: 0;
+}
+
+body {
+  background: var(--background);
+  color: var(--foreground);
+  font-family: "AlteHaasGrotesk", sans-serif;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+/* Custom scrollbar */
+::-webkit-scrollbar {
+  width: 6px;
+}
+::-webkit-scrollbar-track {
+  background: #E7EDF3;
+}
+::-webkit-scrollbar-thumb {
+  background: #A7B8D1;
+  border-radius: 3px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: #6F92BF;
+}
+
+/* Prose-like whitespace for generated posts */
+.post-content {
+  white-space: pre-wrap;
+  line-height: 1.75;
+}
