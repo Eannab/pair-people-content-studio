@@ -3,6 +3,7 @@
 import React, { useState } from "react";
 import { v4 as uuidv4 } from "uuid";
 import GeneratedPost from "./GeneratedPost";
+import ImagePanel from "./ImagePanel";
 import RefinementPanel from "./RefinementPanel";
 
 type PostType =
@@ -284,6 +285,7 @@ export default function CreatePanel() {
       {generatedPost && (
         <div className="space-y-5">
           <GeneratedPost content={generatedPost} />
+          <ImagePanel content={generatedPost} postType={selectedPostType || ""} />
           <RefinementPanel
             postId={postId}
             currentPost={generatedPost}
