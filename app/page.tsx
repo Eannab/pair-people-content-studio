@@ -3,10 +3,12 @@
 import React, { useState } from "react";
 import Sidebar from "@/components/Sidebar";
 import CreatePanel from "@/components/CreatePanel";
+import VoicePanel from "@/components/VoicePanel";
+import PerformancePanel from "@/components/PerformancePanel";
 import IntelligencePanel from "@/components/IntelligencePanel";
 import ResearchPanel from "@/components/ResearchPanel";
 
-type Panel = "create" | "intelligence" | "research";
+type Panel = "create" | "voice" | "performance" | "intelligence" | "research";
 
 export default function Home() {
   const [activePanel, setActivePanel] = useState<Panel>("create");
@@ -22,6 +24,8 @@ export default function Home() {
         style={{ marginLeft: "260px" }}
       >
         {activePanel === "create" && <CreatePanel />}
+        {activePanel === "voice" && <VoicePanel />}
+        {activePanel === "performance" && <PerformancePanel />}
         {activePanel === "intelligence" && <IntelligencePanel />}
         {activePanel === "research" && <ResearchPanel />}
       </main>

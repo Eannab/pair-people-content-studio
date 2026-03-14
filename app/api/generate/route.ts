@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import Anthropic from "@anthropic-ai/sdk";
+import { getVoiceContext } from "@/lib/voice-context";
 
 const anthropic = new Anthropic({
   apiKey: process.env.ANTHROPIC_API_KEY,
@@ -47,10 +48,12 @@ export async function POST(request: NextRequest) {
       ? `You are refining an existing LinkedIn post. ${angleModifiers[angle] || ""}\n\n${context}`
       : `${postTypePrompts[postType] || `Write a LinkedIn post about: ${postType}.`}\n\n${angleModifiers[angle] || ""}\n\nContext provided by the user:\n${context}\n\nWrite the LinkedIn post now. Output only the post text — no preamble, no explanation, no hashtags unless they're genuinely used on LinkedIn.`;
 
+    const voiceContext = await getVoiceContext();
+
     const message = await anthropic.messages.create({
       model: "claude-sonnet-4-20250514",
       max_tokens: 1024,
-      system: SYSTEM_PROMPT,
+      system: SYSTEM_PROMPT + voiceContext,
       messages: [
         {
           role: "user",

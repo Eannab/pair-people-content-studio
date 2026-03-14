@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import Anthropic from "@anthropic-ai/sdk";
 import { kv } from "@vercel/kv";
+import { getVoiceContext } from "@/lib/voice-context";
 
 const anthropic = new Anthropic({
   apiKey: process.env.ANTHROPIC_API_KEY,
@@ -65,10 +66,12 @@ export async function POST(request: NextRequest) {
       return { role: msg.role, content: msg.content };
     });
 
+    const voiceContext = await getVoiceContext();
+
     const response = await anthropic.messages.create({
       model: "claude-sonnet-4-20250514",
       max_tokens: 1024,
-      system: SYSTEM_PROMPT,
+      system: SYSTEM_PROMPT + voiceContext,
       messages: apiMessages,
     });
 
