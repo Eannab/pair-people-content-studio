@@ -42,26 +42,31 @@ export async function POST(request: NextRequest) {
       .join("/");
 
     // $filter is not supported on /children — filter by file presence client-side.
-    const listRes = await graphFetch(
-      `https://graph.microsoft.com/v1.0/me/drive/root:/${encodedPath}:/children?$select=id,name,file&$top=200`,
-      accessToken
-    );
+    // Paginate through all pages using @odata.nextLink.
+    type DriveItem = { id: string; name: string; file?: { mimeType: string } };
+    const allItems: DriveItem[] = [];
+    let nextUrl: string | null =
+      `https://graph.microsoft.com/v1.0/me/drive/root:/${encodedPath}:/children?$select=id,name,file&$top=200`;
 
-    if (!listRes.ok) {
-      const errBody = await listRes.json().catch(() => ({}));
-      const msg = errBody?.error?.message ?? `Graph API ${listRes.status}`;
-      return NextResponse.json(
-        { error: `OneDrive list failed: ${msg}` },
-        { status: 502 }
-      );
+    while (nextUrl) {
+      const listRes = await graphFetch(nextUrl, accessToken);
+
+      if (!listRes.ok) {
+        const errBody = await listRes.json().catch(() => ({}));
+        const msg = errBody?.error?.message ?? `Graph API ${listRes.status}`;
+        return NextResponse.json(
+          { error: `OneDrive list failed: ${msg}` },
+          { status: 502 }
+        );
+      }
+
+      const listData = await listRes.json();
+      allItems.push(...(listData.value ?? []));
+      nextUrl = listData["@odata.nextLink"] ?? null;
     }
 
-    const listData = await listRes.json();
     // Only items that have a `file` facet are actual files (not folders).
-    const files: Array<{ id: string; name: string; file?: { mimeType: string } }> =
-      (listData.value ?? []).filter(
-        (item: { file?: unknown }) => item.file !== undefined
-      );
+    const files = allItems.filter((item) => item.file !== undefined);
 
     const cvFiles = files.filter((f) => {
       const name = f.name.toLowerCase();
