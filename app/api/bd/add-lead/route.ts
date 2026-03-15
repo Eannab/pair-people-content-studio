@@ -8,6 +8,7 @@ import { getSessionUser, uk, unauthorized } from "@/lib/user-key";
 import type { BDLead, AustraliaPresence, CompanySignal } from "@/app/api/bd/signals/route";
 import type { PipelineLead } from "@/app/api/bd/pipeline/route";
 import type { OutreachPreferences } from "@/app/api/bd/preferences/route";
+import { pipelineNameExists, addPipelineLead } from "@/lib/pipeline-kv";
 
 const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
 
@@ -224,11 +225,8 @@ Return ONLY the email body text.`,
       });
     }
 
-    // Upsert into bd:pipeline
-    const existingPipeline = (await kv.get<PipelineLead[]>("bd:pipeline")) ?? [];
-    const alreadyInPipeline = existingPipeline.find(
-      (p) => p.companyName.toLowerCase() === name.toLowerCase()
-    );
+    // Upsert into pipeline
+    const alreadyInPipeline = await pipelineNameExists(name);
 
     let pipelineEntry: PipelineLead;
 
@@ -247,7 +245,7 @@ Return ONLY the email body text.`,
         notes: "",
         updatedAt: now,
       };
-      await kv.set("bd:pipeline", [...existingPipeline, pipelineEntry]);
+      await addPipelineLead(pipelineEntry);
     }
 
     return NextResponse.json({ lead: newLead, pipelineEntry, draft, cvMatches });

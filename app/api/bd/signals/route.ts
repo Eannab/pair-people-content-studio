@@ -3,6 +3,7 @@ import { kv } from "@vercel/kv";
 import { v4 as uuidv4 } from "uuid";
 import { detectBDSignals } from "@/lib/bd-signal-detection";
 import type { ScoredArticle } from "@/app/api/newsletters/scan/route";
+import { getPipelineAll, addPipelineLead } from "@/lib/pipeline-kv";
 
 // ── Exported interfaces (used across the app) ─────────────────────────────────
 
@@ -81,8 +82,7 @@ export async function POST() {
 
     // Auto-add new BD leads to the pipeline (preserve existing status/notes)
     try {
-      const existingPipeline =
-        (await kv.get<Array<{ id: string; companyName: string }>>("bd:pipeline")) ?? [];
+      const existingPipeline = await getPipelineAll();
       const pipelineNames = new Set(
         existingPipeline.map((p) => p.companyName.toLowerCase())
       );
@@ -91,19 +91,20 @@ export async function POST() {
       );
       if (toAdd.length > 0) {
         const now = new Date().toISOString();
-        const newEntries = toAdd.map((l) => ({
-          id: uuidv4(),
-          companyId: l.id,
-          companyName: l.companyName,
-          sector: l.sector,
-          signals: l.signals,
-          relevanceScore: l.relevanceScore,
-          dateAdded: now,
-          status: "new" as const,
-          notes: "",
-          updatedAt: now,
-        }));
-        await kv.set("bd:pipeline", [...existingPipeline, ...newEntries]);
+        for (const l of toAdd) {
+          await addPipelineLead({
+            id: uuidv4(),
+            companyId: l.id,
+            companyName: l.companyName,
+            sector: l.sector,
+            signals: l.signals,
+            relevanceScore: l.relevanceScore,
+            dateAdded: now,
+            status: "new",
+            notes: "",
+            updatedAt: now,
+          });
+        }
       }
     } catch {}
 

@@ -1106,7 +1106,13 @@ const STATUS_META: Record<
   dismissed: { label: "Dismissed", bg: "#E7EDF3", color: "#A7B8D1" },
 };
 
-function PipelineRow({ lead: initial }: { lead: PipelineLead }) {
+function PipelineRow({
+  lead: initial,
+  onViewBrief,
+}: {
+  lead: PipelineLead;
+  onViewBrief: () => void;
+}) {
   const [lead, setLead] = useState(initial);
   const [localNotes, setLocalNotes] = useState(initial.notes);
   const [saved, setSaved] = useState(false);
@@ -1184,6 +1190,29 @@ function PipelineRow({ lead: initial }: { lead: PipelineLead }) {
         </span>
       </div>
 
+      {/* View Brief button */}
+      <div>
+        <button
+          onClick={onViewBrief}
+          className="text-xs font-semibold px-3 py-1.5 rounded-lg transition-all duration-150"
+          style={{
+            backgroundColor: "#E7EDF3",
+            color: "#323B6A",
+            fontFamily: "var(--font-poppins), Poppins, sans-serif",
+          }}
+          onMouseEnter={(e) => {
+            (e.currentTarget as HTMLButtonElement).style.backgroundColor = "#323B6A";
+            (e.currentTarget as HTMLButtonElement).style.color = "#FFFFFF";
+          }}
+          onMouseLeave={(e) => {
+            (e.currentTarget as HTMLButtonElement).style.backgroundColor = "#E7EDF3";
+            (e.currentTarget as HTMLButtonElement).style.color = "#323B6A";
+          }}
+        >
+          View Brief →
+        </button>
+      </div>
+
       {/* Bottom row: notes, status, saved indicator, delete */}
       <div className="flex items-center gap-2">
         <input
@@ -1247,7 +1276,11 @@ function PipelineRow({ lead: initial }: { lead: PipelineLead }) {
   );
 }
 
-function PipelineTab() {
+function PipelineTab({
+  onViewBrief,
+}: {
+  onViewBrief: (companyId: string | undefined, companyName: string) => void;
+}) {
   const [pipeline, setPipeline] = useState<PipelineLead[]>([]);
   const [showDismissed, setShowDismissed] = useState(false);
   const [loading, setLoading] = useState(true);
@@ -1369,7 +1402,11 @@ function PipelineTab() {
           {/* Lead rows */}
           <div className="flex flex-col gap-2">
             {sorted.map((lead) => (
-              <PipelineRow key={lead.id} lead={lead} />
+              <PipelineRow
+                key={lead.id}
+                lead={lead}
+                onViewBrief={() => onViewBrief(lead.companyId, lead.companyName)}
+              />
             ))}
           </div>
 
@@ -1527,7 +1564,37 @@ export default function BDPanel({ onCreatePost }: BDPanelProps) {
       </div>
 
       {/* Pipeline tab */}
-      {activeTab === "pipeline" && <PipelineTab />}
+      {activeTab === "pipeline" && (
+        <PipelineTab
+          onViewBrief={async (companyId, companyName) => {
+            // Try local state first
+            const found = leads.find(
+              (l) =>
+                (companyId && l.id === companyId) ||
+                l.companyName.toLowerCase() === companyName.toLowerCase()
+            );
+            if (found) {
+              setSelectedLead(found);
+              return;
+            }
+            // Lead not in local state — fetch fresh (e.g. added manually or from a previous scan)
+            try {
+              const res = await fetch("/api/bd/leads");
+              const data = await res.json();
+              const freshLeads: BDLead[] = data.leads ?? [];
+              const lead = freshLeads.find(
+                (l) =>
+                  (companyId && l.id === companyId) ||
+                  l.companyName.toLowerCase() === companyName.toLowerCase()
+              );
+              if (lead) {
+                setLeads(freshLeads);
+                setSelectedLead(lead);
+              }
+            } catch {}
+          }}
+        />
+      )}
 
       {/* Digest tab */}
       {activeTab === "digest" && (

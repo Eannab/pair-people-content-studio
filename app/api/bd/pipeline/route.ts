@@ -1,6 +1,9 @@
 import { NextRequest, NextResponse } from "next/server";
-import { kv } from "@vercel/kv";
 import type { CompanySignal } from "@/app/api/bd/signals/route";
+import {
+  getPipelineAll,
+  upsertPipelineLeads,
+} from "@/lib/pipeline-kv";
 
 export interface PipelineLead {
   id: string;
@@ -17,8 +20,8 @@ export interface PipelineLead {
 
 export async function GET() {
   try {
-    const pipeline = await kv.get<PipelineLead[]>("bd:pipeline");
-    return NextResponse.json({ pipeline: pipeline ?? [] });
+    const pipeline = await getPipelineAll();
+    return NextResponse.json({ pipeline });
   } catch {
     return NextResponse.json({ pipeline: [] });
   }
@@ -30,21 +33,13 @@ export async function POST(request: NextRequest) {
     const body = await request.json();
     const incoming: PipelineLead[] = body.leads ?? [];
     if (incoming.length === 0) {
-      const existing = await kv.get<PipelineLead[]>("bd:pipeline") ?? [];
+      const existing = await getPipelineAll();
       return NextResponse.json({ pipeline: existing, added: 0 });
     }
 
-    const existing = (await kv.get<PipelineLead[]>("bd:pipeline")) ?? [];
-    const existingNames = new Set(existing.map((l) => l.companyName.toLowerCase()));
-    const toAdd = incoming.filter((l) => !existingNames.has(l.companyName.toLowerCase()));
-
-    if (toAdd.length === 0) {
-      return NextResponse.json({ pipeline: existing, added: 0 });
-    }
-
-    const updated = [...existing, ...toAdd];
-    await kv.set("bd:pipeline", updated);
-    return NextResponse.json({ pipeline: updated, added: toAdd.length });
+    const { added } = await upsertPipelineLeads(incoming);
+    const pipeline = await getPipelineAll();
+    return NextResponse.json({ pipeline, added });
   } catch (err) {
     return NextResponse.json(
       { error: err instanceof Error ? err.message : "Pipeline update failed" },

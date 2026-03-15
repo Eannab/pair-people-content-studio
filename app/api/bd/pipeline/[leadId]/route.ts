@@ -1,6 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { kv } from "@vercel/kv";
-import type { PipelineLead } from "@/app/api/bd/pipeline/route";
+import { updatePipelineLead, deletePipelineLead } from "@/lib/pipeline-kv";
 
 export async function PATCH(
   request: NextRequest,
@@ -11,19 +10,14 @@ export async function PATCH(
     const body = await request.json();
     const { status, notes } = body;
 
-    const pipeline = (await kv.get<PipelineLead[]>("bd:pipeline")) ?? [];
-    const idx = pipeline.findIndex((l) => l.id === leadId);
-    if (idx === -1) {
+    const updated = await updatePipelineLead(leadId, {
+      ...(status !== undefined && { status }),
+      ...(notes !== undefined && { notes }),
+    });
+
+    if (!updated) {
       return NextResponse.json({ error: "Lead not found" }, { status: 404 });
     }
-
-    const updated = { ...pipeline[idx], updatedAt: new Date().toISOString() };
-    if (status !== undefined) updated.status = status;
-    if (notes !== undefined) updated.notes = notes;
-
-    const updatedPipeline = [...pipeline];
-    updatedPipeline[idx] = updated;
-    await kv.set("bd:pipeline", updatedPipeline);
 
     return NextResponse.json({ lead: updated });
   } catch (err) {
@@ -40,9 +34,7 @@ export async function DELETE(
 ) {
   try {
     const { leadId } = await params;
-    const pipeline = (await kv.get<PipelineLead[]>("bd:pipeline")) ?? [];
-    const updated = pipeline.filter((l) => l.id !== leadId);
-    await kv.set("bd:pipeline", updated);
+    await deletePipelineLead(leadId);
     return NextResponse.json({ ok: true });
   } catch (err) {
     return NextResponse.json(
