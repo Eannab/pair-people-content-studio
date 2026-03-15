@@ -2,11 +2,17 @@ import type { NextAuthOptions } from "next-auth";
 import AzureADProvider from "next-auth/providers/azure-ad";
 
 export const authOptions: NextAuthOptions = {
+  // Must be set via NEXTAUTH_SECRET env var. Required in production.
+  secret: process.env.NEXTAUTH_SECRET,
+
   providers: [
     AzureADProvider({
       clientId: process.env.AZURE_AD_CLIENT_ID!,
       clientSecret: process.env.AZURE_AD_CLIENT_SECRET!,
-      tenantId: process.env.AZURE_AD_TENANT_ID ?? "common",
+      // Must be the specific tenant ID — do NOT fall back to "common".
+      // Using "common" with a specific Azure tenant causes issuer-mismatch
+      // failures that silently loop back to the sign-in page.
+      tenantId: process.env.AZURE_AD_TENANT_ID,
       authorization: {
         params: {
           scope: "openid profile email User.Read Mail.Read offline_access",
@@ -14,9 +20,9 @@ export const authOptions: NextAuthOptions = {
       },
     }),
   ],
+
   callbacks: {
     async jwt({ token, account }) {
-      // Persist the access token to the token right after sign-in
       if (account?.access_token) {
         token.accessToken = account.access_token;
         token.accessTokenExpires = account.expires_at
@@ -26,12 +32,12 @@ export const authOptions: NextAuthOptions = {
       return token;
     },
     async session({ session, token }) {
-      // Forward access token to client session
       session.accessToken = token.accessToken as string | undefined;
       return session;
     },
   },
-  pages: {
-    error: "/", // Redirect auth errors back home
-  },
+
+  // Do NOT set pages.error to "/" — that swallows every auth failure
+  // silently and causes the sign-in loop. Let NextAuth show its own
+  // error page at /api/auth/error so failures are visible.
 };
