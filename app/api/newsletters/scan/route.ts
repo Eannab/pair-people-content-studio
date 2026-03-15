@@ -236,7 +236,7 @@ export async function POST() {
 
     // 3. Fetch inbox metadata for the last 7 days
     const since = new Date(
-      Date.now() - 7 * 24 * 60 * 60 * 1000
+      Date.now() - 30 * 24 * 60 * 60 * 1000
     ).toISOString();
 
     const params = new URLSearchParams({
@@ -316,7 +316,7 @@ export async function POST() {
     const scannedAt = new Date().toISOString();
     try {
       await kv.set("newsletters:articles", scored, {
-        ex: 60 * 60 * 24 * 7, // 7-day TTL
+        ex: 60 * 60 * 24 * 30, // 30-day TTL
       });
       await kv.set("newsletters:scanned_at", scannedAt);
     } catch {}
