@@ -1,18 +1,40 @@
 import type { NextAuthOptions } from "next-auth";
 import AzureADProvider from "next-auth/providers/azure-ad";
 
+const tenantId = process.env.AZURE_AD_TENANT_ID;
+if (!tenantId) {
+  console.error(
+    "[next-auth] AZURE_AD_TENANT_ID is not set. " +
+      "Set it to your Azure Directory (tenant) ID in Vercel environment variables."
+  );
+}
+
 export const authOptions: NextAuthOptions = {
-  // Must be set via NEXTAUTH_SECRET env var. Required in production.
   secret: process.env.NEXTAUTH_SECRET,
+
+  // Writes verbose logs to Vercel's function output — visible in the
+  // Vercel dashboard under Deployments → Functions → [request] → Logs.
+  debug: true,
+
+  logger: {
+    error(code, ...message) {
+      console.error("[next-auth][error]", code, ...message);
+    },
+    warn(code, ...message) {
+      console.warn("[next-auth][warn]", code, ...message);
+    },
+    debug(code, ...message) {
+      console.log("[next-auth][debug]", code, ...message);
+    },
+  },
 
   providers: [
     AzureADProvider({
       clientId: process.env.AZURE_AD_CLIENT_ID!,
       clientSecret: process.env.AZURE_AD_CLIENT_SECRET!,
-      // Must be the specific tenant ID — do NOT fall back to "common".
-      // Using "common" with a specific Azure tenant causes issuer-mismatch
-      // failures that silently loop back to the sign-in page.
-      tenantId: process.env.AZURE_AD_TENANT_ID,
+      // Specific tenant ID is required. "common" causes issuer-mismatch
+      // errors when Azure is registered under a specific tenant.
+      tenantId: tenantId ?? "common",
       authorization: {
         params: {
           scope: "openid profile email User.Read Mail.Read offline_access",
@@ -36,8 +58,4 @@ export const authOptions: NextAuthOptions = {
       return session;
     },
   },
-
-  // Do NOT set pages.error to "/" — that swallows every auth failure
-  // silently and causes the sign-in loop. Let NextAuth show its own
-  // error page at /api/auth/error so failures are visible.
 };
