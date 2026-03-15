@@ -3,6 +3,7 @@ import Anthropic from "@anthropic-ai/sdk";
 import { kv } from "@vercel/kv";
 import { getServerSession } from "next-auth/next";
 import { authOptions } from "@/lib/auth";
+import { graphFetch, GraphAuthError } from "@/lib/graph";
 import { DEFAULT_SENDERS } from "../senders/route";
 import type { NewsletterSender } from "../senders/route";
 
@@ -74,9 +75,9 @@ async function fetchEmailBody(
   accessToken: string,
   messageId: string
 ): Promise<string> {
-  const res = await fetch(
+  const res = await graphFetch(
     `https://graph.microsoft.com/v1.0/me/messages/${messageId}?$select=body`,
-    { headers: { Authorization: `Bearer ${accessToken}` } }
+    accessToken
   );
   if (!res.ok) return "";
   const data: GraphMessageFull = await res.json();
@@ -223,6 +224,12 @@ export async function POST() {
         { status: 401 }
       );
     }
+    if (session.error === "RefreshAccessTokenError") {
+      return NextResponse.json(
+        { error: "Microsoft session expired. Please reconnect.", tokenExpired: true },
+        { status: 401 }
+      );
+    }
 
     // 2. Load senders
     let senders: NewsletterSender[];
@@ -246,22 +253,14 @@ export async function POST() {
       $orderby: "receivedDateTime desc",
     });
 
-    const inboxRes = await fetch(
+    const inboxRes = await graphFetch(
       `https://graph.microsoft.com/v1.0/me/messages?${params}`,
-      { headers: { Authorization: `Bearer ${session.accessToken}` } }
+      session.accessToken
     );
 
     if (!inboxRes.ok) {
       const err = await inboxRes.json().catch(() => ({}));
-      const msg = err?.error?.message ?? `Graph API ${inboxRes.status}`;
-      // Token likely expired
-      if (inboxRes.status === 401) {
-        return NextResponse.json(
-          { error: "Microsoft session expired. Please reconnect Outlook.", tokenExpired: true },
-          { status: 401 }
-        );
-      }
-      throw new Error(msg);
+      throw new Error(err?.error?.message ?? `Graph API ${inboxRes.status}`);
     }
 
     const inboxData = await inboxRes.json();
@@ -329,6 +328,12 @@ export async function POST() {
     });
   } catch (err) {
     console.error("newsletters/scan error:", err);
+    if (err instanceof GraphAuthError) {
+      return NextResponse.json(
+        { error: "Microsoft session expired. Please reconnect.", tokenExpired: true },
+        { status: 401 }
+      );
+    }
     return NextResponse.json(
       { error: err instanceof Error ? err.message : "Scan failed" },
       { status: 500 }

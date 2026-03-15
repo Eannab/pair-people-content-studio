@@ -878,6 +878,25 @@ export default function IntelligencePanel({ onUseForPost, onNavigateToBD }: Prop
 
       {!isLoading && (
         <>
+          {/* Token-expired banner — shown when silent refresh has failed */}
+          {session?.error === "RefreshAccessTokenError" && (
+            <div
+              className="flex items-center justify-between px-4 py-3 rounded-xl mb-4 text-sm"
+              style={{ backgroundColor: "#FFF0F0", border: "1px solid #FFCCCC" }}
+            >
+              <span style={{ color: "#CC4444" }}>
+                Microsoft session expired — please reconnect to restore Outlook access.
+              </span>
+              <button
+                onClick={() => signIn("azure-ad")}
+                className="ml-4 px-3 py-1.5 rounded-lg text-xs font-semibold flex-shrink-0"
+                style={{ backgroundColor: "#323B6A", color: "#FFFFFF", fontFamily: "var(--font-poppins), Poppins, sans-serif" }}
+              >
+                Reconnect
+              </button>
+            </div>
+          )}
+
           {/* Tabs — always visible */}
           <div className="flex border-b mb-6" style={{ borderColor: "#E7EDF3" }}>
             {(["insight", "sources", "manual"] as Tab[]).map((t) => (

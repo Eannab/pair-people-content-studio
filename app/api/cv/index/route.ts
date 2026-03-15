@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import Anthropic from "@anthropic-ai/sdk";
 import { kv } from "@vercel/kv";
 import { v4 as uuidv4 } from "uuid";
+import { graphFetch, GraphAuthError } from "@/lib/graph";
 import type { CVCandidate } from "@/lib/cv-context";
 import type { CVSettings } from "@/app/api/cv/settings/route";
 
@@ -33,9 +34,9 @@ export async function POST(request: NextRequest) {
 
     // ── List files in the OneDrive folder ────────────────────────────────────
     const encodedPath = encodeURIComponent(folderPath);
-    const listRes = await fetch(
+    const listRes = await graphFetch(
       `https://graph.microsoft.com/v1.0/me/drive/root:${encodedPath}:/children?$filter=file ne null&$select=id,name,file`,
-      { headers: { Authorization: `Bearer ${accessToken}` } }
+      accessToken
     );
 
     if (!listRes.ok) {
@@ -52,9 +53,7 @@ export async function POST(request: NextRequest) {
 
     const cvFiles = files.filter((f) => {
       const name = f.name.toLowerCase();
-      return (
-        name.endsWith(".pdf") || name.endsWith(".docx") || name.endsWith(".doc")
-      );
+      return name.endsWith(".pdf") || name.endsWith(".docx") || name.endsWith(".doc");
     });
 
     if (cvFiles.length === 0) {
@@ -71,10 +70,9 @@ export async function POST(request: NextRequest) {
 
     for (const file of cvFiles) {
       try {
-        // Download file content
-        const downloadRes = await fetch(
+        const downloadRes = await graphFetch(
           `https://graph.microsoft.com/v1.0/me/drive/items/${file.id}/content`,
-          { headers: { Authorization: `Bearer ${accessToken}` } }
+          accessToken
         );
         if (!downloadRes.ok) continue;
 
@@ -95,7 +93,6 @@ export async function POST(request: NextRequest) {
 
         const truncated = text.trim().substring(0, 3000);
 
-        // Extract structured data with Claude Haiku
         const extractRes = await anthropic.messages.create({
           model: "claude-haiku-4-5-20251001",
           max_tokens: 600,
@@ -143,6 +140,7 @@ Return ONLY the JSON object.`,
           indexedAt: now,
         });
       } catch (fileErr) {
+        if (fileErr instanceof GraphAuthError) throw fileErr; // bubble up
         console.error(`Error processing ${file.name}:`, fileErr);
       }
     }
@@ -152,6 +150,12 @@ Return ONLY the JSON object.`,
     return NextResponse.json({ candidates, count: candidates.length });
   } catch (err) {
     console.error("cv/index POST error:", err);
+    if (err instanceof GraphAuthError) {
+      return NextResponse.json(
+        { error: "Microsoft session expired. Please reconnect.", tokenExpired: true },
+        { status: 401 }
+      );
+    }
     return NextResponse.json(
       { error: err instanceof Error ? err.message : "Indexing failed" },
       { status: 500 }

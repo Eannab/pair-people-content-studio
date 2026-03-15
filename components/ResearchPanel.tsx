@@ -1,7 +1,7 @@
 "use client";
 
 import React, { useState, useEffect, useCallback } from "react";
-import { useSession } from "next-auth/react";
+import { useSession, signIn } from "next-auth/react";
 import type { CVCandidate } from "@/lib/cv-context";
 import type { LinkedInIntelligenceReport, LinkedInInsight } from "@/lib/linkedin-insights-context";
 
@@ -105,6 +105,10 @@ function CVIntelligenceTab() {
         body: JSON.stringify({ accessToken: session.accessToken }),
       });
       const data = await res.json();
+      if (res.status === 401 && data.tokenExpired) {
+        signIn("azure-ad");
+        return;
+      }
       if (!res.ok) throw new Error(data.error ?? "Scan failed");
       setCandidates(data.candidates ?? []);
       if (data.candidates?.length > 0) setLastIndexed(new Date().toISOString());
@@ -216,7 +220,25 @@ function CVIntelligenceTab() {
         </button>
       </div>
 
-      {!session?.accessToken && (
+      {session?.error === "RefreshAccessTokenError" && (
+        <div
+          className="flex items-center justify-between px-4 py-3 rounded-xl text-sm"
+          style={{ backgroundColor: "#FFF0F0", border: "1px solid #FFCCCC" }}
+        >
+          <span style={{ color: "#CC4444" }}>
+            Microsoft session expired — please reconnect to restore access.
+          </span>
+          <button
+            onClick={() => signIn("azure-ad")}
+            className="ml-4 px-3 py-1.5 rounded-lg text-xs font-semibold flex-shrink-0"
+            style={{ backgroundColor: "#323B6A", color: "#FFFFFF", fontFamily: "var(--font-poppins), Poppins, sans-serif" }}
+          >
+            Reconnect
+          </button>
+        </div>
+      )}
+
+      {!session?.accessToken && session?.error !== "RefreshAccessTokenError" && (
         <p className="text-xs px-3 py-2 rounded-lg" style={{ backgroundColor: "#FFF8E1", color: "#B8860B" }}>
           Connect your Microsoft account (via Market Intelligence) to scan OneDrive CVs.
         </p>
