@@ -75,8 +75,8 @@ export default function VoicePanel() {
   }, []);
 
   const handleFile = async (file: File) => {
-    if (!file.name.endsWith(".csv")) {
-      setErrorMsg("Please upload a .csv file (Posts.csv from your LinkedIn data export).");
+    if (!file.name.endsWith(".csv") && !file.name.endsWith(".docx")) {
+      setErrorMsg("Please upload a .csv file (LinkedIn Posts.csv) or a .docx writing sample.");
       setStage("error");
       return;
     }
@@ -167,7 +167,7 @@ export default function VoicePanel() {
                 className="text-xs font-semibold"
                 style={{ color: "#323B6A", fontFamily: "var(--font-poppins), Poppins, sans-serif", fontWeight: 600 }}
               >
-                LinkedIn Post History
+                Writing Samples
               </span>
             </div>
             {postCount > 0 && (
@@ -201,23 +201,24 @@ export default function VoicePanel() {
             </svg>
             <div className="text-center">
               <p className="text-sm font-medium" style={{ color: "#323B6A", fontFamily: "var(--font-poppins), Poppins, sans-serif" }}>
-                {postCount > 0 ? "Re-upload Posts.csv" : "Upload Posts.csv"}
+                {postCount > 0 ? "Re-upload file" : "Upload Posts.csv or a Word doc"}
               </p>
               <p className="text-xs mt-0.5" style={{ color: "#A7B8D1" }}>
-                Drag & drop or click — from your LinkedIn data export
+                Drag & drop or click — .csv or .docx
               </p>
             </div>
           </div>
           <input
             ref={fileInputRef}
             type="file"
-            accept=".csv"
+            accept=".csv,.docx"
             className="hidden"
             onChange={handleInputChange}
           />
 
           <p className="text-xs mt-3" style={{ color: "#A7B8D1" }}>
-            Go to <strong style={{ color: "#6F92BF" }}>linkedin.com/mypreferences/d/download-my-data</strong>, request &ldquo;Posts&rdquo;, download and upload <strong>Posts.csv</strong>.
+            <strong style={{ color: "#6F92BF" }}>LinkedIn CSV:</strong> go to linkedin.com/mypreferences/d/download-my-data, request &ldquo;Posts&rdquo;, upload <strong>Posts.csv</strong>.
+            {" "}<strong style={{ color: "#6F92BF" }}>Word doc:</strong> paste your writing samples into a .docx — one sample per paragraph block.
           </p>
         </div>
       </div>
@@ -234,10 +235,10 @@ export default function VoicePanel() {
           </svg>
           <div>
             <p className="text-sm font-semibold" style={{ color: "#323B6A", fontFamily: "var(--font-poppins), Poppins, sans-serif" }}>
-              {stage === "uploading" ? "Parsing CSV…" : `Analysing ${postCount} posts with Claude…`}
+              {stage === "uploading" ? "Parsing file…" : `Analysing ${postCount} samples with Claude…`}
             </p>
             <p className="text-xs mt-0.5" style={{ color: "#6F92BF" }}>
-              {stage === "profiling" ? "This takes 15–30 seconds. Sit tight." : "Reading your post history"}
+              {stage === "profiling" ? "This takes 15–30 seconds. Sit tight." : "Extracting your writing samples"}
             </p>
           </div>
         </div>

@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import mammoth from "mammoth";
 import { kv } from "@vercel/kv";
 import { getSessionUser, uk, unauthorized } from "@/lib/user-key";
 
@@ -106,6 +107,25 @@ function extractPosts(rows: Record<string, string>[]): LinkedInPost[] {
     });
 }
 
+// ── DOCX extractor ───────────────────────────────────────────────────────────
+
+async function extractPostsFromDocx(buffer: ArrayBuffer): Promise<LinkedInPost[]> {
+  const result = await mammoth.extractRawText({ buffer: Buffer.from(buffer) });
+  const text = result.value;
+
+  // Split on blank lines (paragraph breaks) — each block becomes one "post"
+  const blocks = text
+    .split(/\n{2,}/)
+    .map((b) => b.replace(/\n/g, " ").trim())
+    .filter((b) => b.length > 20);
+
+  if (blocks.length === 0) {
+    throw new Error("No text content found in the Word document.");
+  }
+
+  return blocks.map((b) => ({ text: b, date: "" }));
+}
+
 // ── Route ────────────────────────────────────────────────────────────────────
 
 export async function POST(request: NextRequest) {
@@ -120,33 +140,43 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: "No file provided" }, { status: 400 });
     }
 
-    if (!file.name.endsWith(".csv")) {
+    const isCSV = file.name.endsWith(".csv");
+    const isDocx = file.name.endsWith(".docx");
+
+    if (!isCSV && !isDocx) {
       return NextResponse.json(
-        { error: "Please upload a CSV file (Posts.csv from your LinkedIn data export)" },
+        { error: "Please upload a .csv file (LinkedIn Posts.csv) or a .docx writing sample." },
         { status: 400 }
       );
     }
 
-    const raw = await file.text();
-    const rows = parseCSV(raw);
+    let posts: LinkedInPost[];
 
-    if (rows.length === 0) {
-      return NextResponse.json(
-        { error: "CSV appears to be empty or could not be parsed" },
-        { status: 400 }
-      );
-    }
+    if (isDocx) {
+      const buffer = await file.arrayBuffer();
+      posts = await extractPostsFromDocx(buffer);
+    } else {
+      const raw = await file.text();
+      const rows = parseCSV(raw);
 
-    const posts = extractPosts(rows);
+      if (rows.length === 0) {
+        return NextResponse.json(
+          { error: "CSV appears to be empty or could not be parsed" },
+          { status: 400 }
+        );
+      }
 
-    if (posts.length === 0) {
-      return NextResponse.json(
-        {
-          error:
-            "No posts found in the CSV. Make sure you are uploading Posts.csv from your LinkedIn data export.",
-        },
-        { status: 400 }
-      );
+      posts = extractPosts(rows);
+
+      if (posts.length === 0) {
+        return NextResponse.json(
+          {
+            error:
+              "No posts found in the CSV. Make sure you are uploading Posts.csv from your LinkedIn data export.",
+          },
+          { status: 400 }
+        );
+      }
     }
 
     // Store under the authenticated user's namespace; clear stale profile/assessments
