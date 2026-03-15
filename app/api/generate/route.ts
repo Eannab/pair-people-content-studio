@@ -2,12 +2,15 @@ import { NextRequest, NextResponse } from "next/server";
 import Anthropic from "@anthropic-ai/sdk";
 import { getVoiceContext } from "@/lib/voice-context";
 import { getLinkedInInsightsContext } from "@/lib/linkedin-insights-context";
+import { getSessionUser } from "@/lib/user-key";
 
 const anthropic = new Anthropic({
   apiKey: process.env.ANTHROPIC_API_KEY,
 });
 
-const SYSTEM_PROMPT = `You are a LinkedIn ghostwriter for Eanna Barry, co-founder of Pair People, a Sydney-based tech recruitment agency. Write engaging LinkedIn posts that sound authentic, human, and relevant to the Sydney tech and recruitment scene. Pair People's unique value proposition is their Fixed Fee recruitment model. Posts should avoid corporate jargon, be conversational, use line breaks for readability (LinkedIn format), and end with a subtle call to action or thought-provoking question.`;
+function buildSystemPrompt(userName: string): string {
+  return `You are a LinkedIn ghostwriter for ${userName}, co-founder of Pair People, a Sydney-based tech recruitment agency. Write engaging LinkedIn posts that sound authentic, human, and relevant to the Sydney tech and recruitment scene. Pair People's unique value proposition is their Fixed Fee recruitment model. Posts should avoid corporate jargon, be conversational, use line breaks for readability (LinkedIn format), and end with a subtle call to action or thought-provoking question.`;
+}
 
 const postTypePrompts: Record<string, string> = {
   "Hot Candidate":
@@ -34,6 +37,8 @@ const angleModifiers: Record<string, string> = {
 };
 
 export async function POST(request: NextRequest) {
+  const sessionUser = await getSessionUser();
+
   try {
     const body = await request.json();
     const { postType, angle, context, isRefinement } = body;
@@ -49,15 +54,16 @@ export async function POST(request: NextRequest) {
       ? `You are refining an existing LinkedIn post. ${angleModifiers[angle] || ""}\n\n${context}`
       : `${postTypePrompts[postType] || `Write a LinkedIn post about: ${postType}.`}\n\n${angleModifiers[angle] || ""}\n\nContext provided by the user:\n${context}\n\nWrite the LinkedIn post now. Output only the post text — no preamble, no explanation, no hashtags unless they're genuinely used on LinkedIn.`;
 
+    const userName = sessionUser?.name ?? "Eanna Barry";
     const [voiceContext, insightsContext] = await Promise.all([
-      getVoiceContext(),
+      getVoiceContext(sessionUser?.email),
       getLinkedInInsightsContext(postType),
     ]);
 
     const message = await anthropic.messages.create({
       model: "claude-sonnet-4-20250514",
       max_tokens: 1024,
-      system: SYSTEM_PROMPT + voiceContext + insightsContext,
+      system: buildSystemPrompt(userName) + voiceContext + insightsContext,
       messages: [
         {
           role: "user",

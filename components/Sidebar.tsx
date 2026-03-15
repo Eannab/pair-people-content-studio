@@ -1,6 +1,7 @@
 "use client";
 
 import React from "react";
+import { useSession, signOut } from "next-auth/react";
 
 type Panel = "create" | "voice" | "performance" | "intelligence" | "research" | "bd";
 
@@ -93,6 +94,10 @@ const navGroups: NavGroup[] = [
 ];
 
 export default function Sidebar({ activePanel, onPanelChange }: SidebarProps) {
+  const { data: session } = useSession();
+  const userName = session?.user?.name ?? session?.user?.email?.split("@")[0] ?? "";
+  const userInitial = userName ? userName.charAt(0).toUpperCase() : "?";
+
   return (
     <aside
       className="fixed left-0 top-0 h-full flex flex-col"
@@ -166,14 +171,41 @@ export default function Sidebar({ activePanel, onPanelChange }: SidebarProps) {
         ))}
       </nav>
 
-      {/* Footer */}
-      <div className="px-6 py-5 border-t border-white/10">
-        <p className="text-xs" style={{ color: "#A7B8D1" }}>
-          Powered by Claude AI
-        </p>
-        <p className="text-xs mt-0.5" style={{ color: "rgba(255,255,255,0.3)" }}>
-          v1.0.0
-        </p>
+      {/* Footer — user + logout */}
+      <div className="px-4 py-4 border-t border-white/10">
+        {userName && (
+          <div className="flex items-center gap-3 mb-3">
+            <div
+              className="flex-shrink-0 w-8 h-8 rounded-full flex items-center justify-center text-sm font-semibold"
+              style={{ backgroundColor: "#BDCF7C", color: "#323B6A" }}
+            >
+              {userInitial}
+            </div>
+            <span
+              className="text-sm truncate"
+              style={{ color: "#E7EDF3", fontFamily: "var(--font-poppins), Poppins, sans-serif", fontWeight: 500 }}
+            >
+              {userName}
+            </span>
+          </div>
+        )}
+        <button
+          onClick={() => signOut({ callbackUrl: "/api/auth/signin" })}
+          className="w-full flex items-center gap-2 px-3 py-2 rounded-lg text-xs transition-all duration-150"
+          style={{ color: "#A7B8D1" }}
+          onMouseEnter={(e) => {
+            (e.currentTarget as HTMLButtonElement).style.backgroundColor = "rgba(255,255,255,0.08)";
+          }}
+          onMouseLeave={(e) => {
+            (e.currentTarget as HTMLButtonElement).style.backgroundColor = "transparent";
+          }}
+        >
+          <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
+              d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1" />
+          </svg>
+          Sign out
+        </button>
       </div>
     </aside>
   );

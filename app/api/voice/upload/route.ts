@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { kv } from "@vercel/kv";
+import { getSessionUser, uk, unauthorized } from "@/lib/user-key";
 
 export interface LinkedInPost {
   text: string;
@@ -36,7 +37,7 @@ function parseCSV(raw: string): Record<string, string>[] {
         rows[rows.length - 1].push(field);
         field = "";
         rows.push([]);
-        i++; // skip \n
+        i++;
       } else if (c === "\n" || c === "\r") {
         rows[rows.length - 1].push(field);
         field = "";
@@ -66,16 +67,24 @@ function extractPosts(rows: Record<string, string>[]): LinkedInPost[] {
 
   const keys = Object.keys(rows[0]);
 
-  // LinkedIn exports can use different column names — try common variants
   const textCol =
     ["ShareCommentary", "Content", "Post", "Text", "Description", "Body"].find(
       (c) => keys.includes(c)
-    ) ?? keys.find((k) => k.toLowerCase().includes("comment") || k.toLowerCase().includes("content") || k.toLowerCase().includes("text"));
+    ) ??
+    keys.find(
+      (k) =>
+        k.toLowerCase().includes("comment") ||
+        k.toLowerCase().includes("content") ||
+        k.toLowerCase().includes("text")
+    );
 
   const dateCol =
     ["Date", "date", "PublishedDate", "CreatedDate", "Timestamp", "PostDate"].find(
       (c) => keys.includes(c)
-    ) ?? keys.find((k) => k.toLowerCase().includes("date") || k.toLowerCase().includes("time"));
+    ) ??
+    keys.find(
+      (k) => k.toLowerCase().includes("date") || k.toLowerCase().includes("time")
+    );
 
   if (!textCol) {
     throw new Error(
@@ -100,6 +109,9 @@ function extractPosts(rows: Record<string, string>[]): LinkedInPost[] {
 // ── Route ────────────────────────────────────────────────────────────────────
 
 export async function POST(request: NextRequest) {
+  const user = await getSessionUser();
+  if (!user) return unauthorized();
+
   try {
     const formData = await request.formData();
     const file = formData.get("file") as File | null;
@@ -129,15 +141,18 @@ export async function POST(request: NextRequest) {
 
     if (posts.length === 0) {
       return NextResponse.json(
-        { error: "No posts found in the CSV. Make sure you are uploading Posts.csv from your LinkedIn data export." },
+        {
+          error:
+            "No posts found in the CSV. Make sure you are uploading Posts.csv from your LinkedIn data export.",
+        },
         { status: 400 }
       );
     }
 
-    // Store posts; clear stale profile & assessments so they get refreshed
-    await kv.set("linkedin:posts", posts);
-    await kv.del("linkedin:voice_profile");
-    await kv.del("linkedin:assessments");
+    // Store under the authenticated user's namespace; clear stale profile/assessments
+    await kv.set(uk(user.email, "linkedin:posts"), posts);
+    await kv.del(uk(user.email, "linkedin:voice_profile"));
+    await kv.del(uk(user.email, "linkedin:assessments"));
 
     return NextResponse.json({ postCount: posts.length, posts });
   } catch (err) {

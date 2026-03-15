@@ -502,15 +502,25 @@ function OutreachChat({ companyId, currentDraft, onDraftUpdate }: OutreachChatPr
 interface LeadDetailProps {
   lead: BDLead;
   onBack: () => void;
-  onLeadUpdate: (updated: BDLead) => void;
+  onLeadUpdate?: (updated: BDLead) => void;
 }
 
-function LeadDetail({ lead, onBack, onLeadUpdate }: LeadDetailProps) {
-  const [draft, setDraft] = useState(lead.outreachDraft ?? "");
+function LeadDetail({ lead, onBack }: LeadDetailProps) {
+  const [draft, setDraft] = useState("");
   const [isDrafting, setIsDrafting] = useState(false);
   const [draftError, setDraftError] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
   const ap = lead.australiaPresence;
+
+  // Load the user's saved draft on mount
+  React.useEffect(() => {
+    fetch(`/api/bd/draft/${lead.id}`)
+      .then((r) => r.json())
+      .then((data) => {
+        if (data.draft) setDraft(data.draft);
+      })
+      .catch(() => {});
+  }, [lead.id]);
 
   const generateDraft = async () => {
     setIsDrafting(true);
@@ -520,7 +530,6 @@ function LeadDetail({ lead, onBack, onLeadUpdate }: LeadDetailProps) {
       if (!res.ok) throw new Error("Draft generation failed");
       const data = await res.json();
       setDraft(data.draft);
-      onLeadUpdate(data.lead);
     } catch (err) {
       setDraftError(err instanceof Error ? err.message : "Draft failed");
     } finally {

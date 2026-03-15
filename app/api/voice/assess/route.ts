@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import Anthropic from "@anthropic-ai/sdk";
 import { kv } from "@vercel/kv";
+import { getSessionUser, uk, unauthorized } from "@/lib/user-key";
 import type { LinkedInPost } from "../upload/route";
 
 export interface PostAssessment {
@@ -14,10 +15,15 @@ export interface PostAssessment {
 
 const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
 
-// GET — return cached assessments
+// GET — return cached assessments for the authenticated user
 export async function GET() {
+  const user = await getSessionUser();
+  if (!user) return unauthorized();
+
   try {
-    const assessments = await kv.get<PostAssessment[]>("linkedin:assessments");
+    const assessments = await kv.get<PostAssessment[]>(
+      uk(user.email, "linkedin:assessments")
+    );
     return NextResponse.json({ assessments: assessments ?? null });
   } catch (err) {
     return NextResponse.json(
@@ -27,10 +33,13 @@ export async function GET() {
   }
 }
 
-// POST — run fresh assessment on stored posts (up to 30)
+// POST — run fresh assessment on the authenticated user's stored posts
 export async function POST() {
+  const user = await getSessionUser();
+  if (!user) return unauthorized();
+
   try {
-    const posts = await kv.get<LinkedInPost[]>("linkedin:posts");
+    const posts = await kv.get<LinkedInPost[]>(uk(user.email, "linkedin:posts"));
     if (!posts || posts.length === 0) {
       return NextResponse.json(
         { error: "No posts found. Please upload your LinkedIn CSV first." },
@@ -53,7 +62,7 @@ export async function POST() {
       messages: [
         {
           role: "user",
-          content: `Assess these ${sample.length} LinkedIn posts by Eanna Barry (co-founder of Pair People, a Sydney tech recruitment agency). Return a JSON array with one object per post in the same order.
+          content: `Assess these ${sample.length} LinkedIn posts by ${user.name} (co-founder of Pair People, a Sydney tech recruitment agency). Return a JSON array with one object per post in the same order.
 
 Each object must have:
 - "tier": "A" | "B" | "C"   (A = excellent hook + high engagement potential, B = solid and clear value, C = average or generic)
@@ -70,7 +79,6 @@ Respond with ONLY the JSON array — no markdown fences, no preamble.`,
 
     const raw =
       message.content[0].type === "text" ? message.content[0].text.trim() : "[]";
-
     const jsonStr = raw.replace(/^```(?:json)?\n?/, "").replace(/\n?```$/, "");
 
     let tiers: Array<{
@@ -98,7 +106,7 @@ Respond with ONLY the JSON array — no markdown fences, no preamble.`,
       inferredType: tiers[i]?.inferredType ?? "Other",
     }));
 
-    await kv.set("linkedin:assessments", assessments);
+    await kv.set(uk(user.email, "linkedin:assessments"), assessments);
 
     return NextResponse.json({ assessments });
   } catch (err) {

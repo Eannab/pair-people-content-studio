@@ -1,4 +1,5 @@
 import { kv } from "@vercel/kv";
+import { uk } from "@/lib/user-key";
 
 interface StoredProfile {
   summary: string;
@@ -7,15 +8,23 @@ interface StoredProfile {
 }
 
 /**
- * Returns a string to append to a system prompt with Eanna's voice profile,
- * or an empty string if no profile is stored or KV is unavailable.
+ * Returns a string to append to a system prompt containing the user's
+ * LinkedIn voice profile, or an empty string if none is stored.
+ *
+ * Pass the authenticated user's email so each user gets their own profile.
  */
-export async function getVoiceContext(): Promise<string> {
+export async function getVoiceContext(userId?: string): Promise<string> {
   try {
-    const profile = await kv.get<StoredProfile>("linkedin:voice_profile");
+    const key = userId ? uk(userId, "linkedin:voice_profile") : "linkedin:voice_profile";
+    const profile = await kv.get<StoredProfile>(key);
     if (!profile?.summary) return "";
+
+    const displayName = userId
+      ? userId.split("@")[0].replace(".", " ")
+      : "the author";
+
     return (
-      `\n\n## Eanna's Established LinkedIn Voice` +
+      `\n\n## ${displayName}'s Established LinkedIn Voice` +
       `\n${profile.summary}` +
       `\n\nTarget post length: ~${profile.averageLength} characters. ` +
       `Typical structure: ${profile.typicalStructure}`

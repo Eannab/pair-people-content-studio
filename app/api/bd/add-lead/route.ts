@@ -4,6 +4,7 @@ import { kv } from "@vercel/kv";
 import { v4 as uuidv4 } from "uuid";
 import { braveSearch, formatResults } from "@/lib/brave-search";
 import { getTopCVMatches } from "@/lib/cv-context";
+import { getSessionUser, uk, unauthorized } from "@/lib/user-key";
 import type { BDLead, AustraliaPresence, CompanySignal } from "@/app/api/bd/signals/route";
 import type { PipelineLead } from "@/app/api/bd/pipeline/route";
 import type { OutreachPreferences } from "@/app/api/bd/preferences/route";
@@ -11,6 +12,9 @@ import type { OutreachPreferences } from "@/app/api/bd/preferences/route";
 const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
 
 export async function POST(request: NextRequest) {
+  const user = await getSessionUser();
+  if (!user) return unauthorized();
+
   try {
     const { companyName } = await request.json();
     if (!companyName?.trim()) {
@@ -139,7 +143,7 @@ Return ONLY the JSON object — no markdown fences, no preamble.`,
 
     const [cvMatches, preferences] = await Promise.all([
       getTopCVMatches(newLead, 2, 7),
-      kv.get<OutreachPreferences>("bd:outreach_preferences").catch(() => null),
+      kv.get<OutreachPreferences>(uk(user.email, "bd:outreach_preferences")).catch(() => null),
     ]);
 
     const cvSection =
@@ -153,7 +157,7 @@ Return ONLY the JSON object — no markdown fences, no preamble.`,
         : "";
 
     const prefSection = preferences?.rawPreferences
-      ? `\n\nEanna's outreach preferences:\n${preferences.rawPreferences}`
+      ? `\n\n${user.name}'s outreach preferences:\n${preferences.rawPreferences}`
       : "";
 
     const sectorSpecialism =
@@ -176,7 +180,7 @@ Return ONLY the JSON object — no markdown fences, no preamble.`,
       messages: [
         {
           role: "user",
-          content: `Write a cold outreach email from Eanna Barry (co-founder, Pair People) to the hiring contact at ${name}.
+          content: `Write a cold outreach email from ${user.name} (co-founder, Pair People) to the hiring contact at ${name}.
 
 Company context:
 - Overview: ${brief.overview || name}
@@ -189,10 +193,10 @@ ${prefSection}${cvSection}
 Write the email body only (no subject line). Requirements:
 - 100-120 words total
 - First sentence: research hook referencing the signal — show you've done your homework
-- Next 1-2 sentences: introduce Eanna and Pair People — "boutique Sydney tech recruitment agency", specialist in ${sectorSpecialism} talent
+- Next 1-2 sentences: introduce ${user.name} and Pair People — "boutique Sydney tech recruitment agency", specialist in ${sectorSpecialism} talent
 - 3 bullet points on what Pair People offers (under 15 words each, concrete and specific)
 - Closing: soft CTA for a 15-minute call, no pressure
-- Sign off: Eanna
+- Sign off: ${user.name.split(" ")[0]}
 - Tone: direct, warm, confident. No fluff. No "I hope this finds you well." No "please don't hesitate."
 
 Return ONLY the email body text.`,
@@ -202,10 +206,15 @@ Return ONLY the email body text.`,
 
     const draft =
       draftRes.content[0].type === "text" ? draftRes.content[0].text.trim() : "";
-    newLead.outreachDraft = draft;
-    newLead.outreachDraftedAt = now;
 
     // ── Step 4: Persist to KV ────────────────────────────────────────────────
+
+    // Store draft under the authenticated user's namespace
+    if (draft) {
+      await kv.set(uk(user.email, `bd:draft:${leadId}`), draft, {
+        ex: 60 * 60 * 24 * 30,
+      });
+    }
 
     // Merge into bd:leads (skip if already exists)
     const existingLeads = (await kv.get<BDLead[]>("bd:leads")) ?? [];

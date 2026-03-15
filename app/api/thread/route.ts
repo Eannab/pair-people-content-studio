@@ -2,12 +2,13 @@ import { NextRequest, NextResponse } from "next/server";
 import Anthropic from "@anthropic-ai/sdk";
 import { kv } from "@vercel/kv";
 import { getVoiceContext } from "@/lib/voice-context";
+import { getSessionUser, uk } from "@/lib/user-key";
 
 const anthropic = new Anthropic({
   apiKey: process.env.ANTHROPIC_API_KEY,
 });
 
-const SYSTEM_PROMPT = `You are a LinkedIn ghostwriter for Eanna Barry, co-founder of Pair People, a Sydney-based tech recruitment agency. You are in a multi-turn conversation helping refine a LinkedIn post.
+const BASE_SYSTEM_PROMPT = `You are a LinkedIn ghostwriter for a co-founder of Pair People, a Sydney-based tech recruitment agency. You are in a multi-turn conversation helping refine a LinkedIn post.
 
 When the user asks for changes or improvements, provide the full revised post. When the user asks questions, answer them helpfully. Keep responses focused on improving the post and making it as effective as possible for LinkedIn engagement in the Sydney tech space.
 
@@ -19,6 +20,8 @@ interface Message {
 }
 
 export async function POST(request: NextRequest) {
+  const sessionUser = await getSessionUser();
+
   try {
     const body = await request.json();
     const { postId, message, conversationHistory, currentPost, postType, angle } = body;
@@ -30,11 +33,15 @@ export async function POST(request: NextRequest) {
       );
     }
 
+    const threadKey = sessionUser
+      ? uk(sessionUser.email, `thread:${postId}`)
+      : `thread:${postId}`;
+
     // Try to load existing history from KV, fall back to provided history
     let history: Message[] = conversationHistory || [];
 
     try {
-      const storedHistory = await kv.get<Message[]>(`thread:${postId}`);
+      const storedHistory = await kv.get<Message[]>(threadKey);
       if (storedHistory && storedHistory.length > 0) {
         history = storedHistory;
       }
@@ -66,7 +73,13 @@ export async function POST(request: NextRequest) {
       return { role: msg.role, content: msg.content };
     });
 
-    const voiceContext = await getVoiceContext();
+    const userName = sessionUser?.name ?? "the author";
+    const SYSTEM_PROMPT = BASE_SYSTEM_PROMPT.replace(
+      "a co-founder of Pair People",
+      `${userName}, co-founder of Pair People`
+    );
+
+    const voiceContext = await getVoiceContext(sessionUser?.email);
 
     const response = await anthropic.messages.create({
       model: "claude-sonnet-4-20250514",
@@ -88,7 +101,7 @@ export async function POST(request: NextRequest) {
 
     // Persist to KV (if available)
     try {
-      await kv.set(`thread:${postId}`, updatedHistory, { ex: 60 * 60 * 24 * 7 }); // 7 days TTL
+      await kv.set(threadKey, updatedHistory, { ex: 60 * 60 * 24 * 7 }); // 7 days TTL
     } catch (kvError) {
       console.warn("Could not persist thread to KV:", kvError);
     }
