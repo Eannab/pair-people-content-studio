@@ -842,6 +842,248 @@ function LeadDetail({ lead, onBack, onLeadUpdate }: LeadDetailProps) {
   );
 }
 
+// ── Add Lead Modal ────────────────────────────────────────────────────────────
+
+const ADD_LEAD_STEPS = [
+  "Searching the web…",
+  "Building company brief…",
+  "Generating outreach draft…",
+];
+
+function AddLeadModal({
+  onClose,
+  onAdded,
+}: {
+  onClose: () => void;
+  onAdded: (entry: PipelineLead) => void;
+}) {
+  const [companyName, setCompanyName] = useState("");
+  const [phase, setPhase] = useState<"idle" | "loading" | "done" | "error">("idle");
+  const [stepIdx, setStepIdx] = useState(0);
+  const [error, setError] = useState("");
+  const [result, setResult] = useState<{
+    lead: BDLead;
+    pipelineEntry: PipelineLead;
+    draft: string;
+  } | null>(null);
+  const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
+  const startProgress = () => {
+    setStepIdx(0);
+    intervalRef.current = setInterval(() => {
+      setStepIdx((i) => Math.min(i + 1, ADD_LEAD_STEPS.length - 1));
+    }, 5000);
+  };
+
+  const stopProgress = () => {
+    if (intervalRef.current) clearInterval(intervalRef.current);
+  };
+
+  const handleAdd = async () => {
+    const name = companyName.trim();
+    if (!name) return;
+    setPhase("loading");
+    setError("");
+    startProgress();
+
+    try {
+      const res = await fetch("/api/bd/add-lead", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ companyName: name }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error ?? "Failed to add lead");
+
+      stopProgress();
+      setResult(data);
+      setPhase("done");
+      if (data.pipelineEntry) onAdded(data.pipelineEntry);
+    } catch (err) {
+      stopProgress();
+      setError(err instanceof Error ? err.message : "Something went wrong");
+      setPhase("error");
+    }
+  };
+
+  return (
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center p-4"
+      style={{ backgroundColor: "rgba(50,59,106,0.5)" }}
+    >
+      <div
+        className="w-full max-w-lg rounded-2xl p-6 flex flex-col gap-4"
+        style={{ backgroundColor: "#FFFFFF", boxShadow: "0 20px 60px rgba(50,59,106,0.25)" }}
+      >
+        {/* Header */}
+        <div className="flex items-center justify-between">
+          <h3
+            className="text-base font-bold"
+            style={{ fontFamily: "var(--font-poppins), Poppins, sans-serif", color: "#323B6A" }}
+          >
+            Add Lead Manually
+          </h3>
+          <button
+            onClick={onClose}
+            className="text-sm px-3 py-1 rounded-lg"
+            style={{ backgroundColor: "#E7EDF3", color: "#6F92BF" }}
+          >
+            Close
+          </button>
+        </div>
+
+        {phase === "idle" && (
+          <>
+            <p className="text-xs" style={{ color: "#6F92BF" }}>
+              Enter a company name. We&apos;ll search the web, build a company brief, and generate an outreach draft automatically.
+            </p>
+            <input
+              type="text"
+              value={companyName}
+              onChange={(e) => setCompanyName(e.target.value)}
+              onKeyDown={(e) => e.key === "Enter" && handleAdd()}
+              placeholder="e.g. Canva, Atlassian, Rokt…"
+              autoFocus
+              className="w-full px-4 py-3 rounded-xl text-sm outline-none"
+              style={{ border: "1.5px solid #E7EDF3", color: "#323B6A" }}
+              onFocus={(e) => (e.currentTarget.style.borderColor = "#BDCF7C")}
+              onBlur={(e) => (e.currentTarget.style.borderColor = "#E7EDF3")}
+            />
+            <button
+              onClick={handleAdd}
+              disabled={!companyName.trim()}
+              className="w-full py-3 rounded-xl text-sm font-bold"
+              style={{
+                backgroundColor: companyName.trim() ? "#323B6A" : "#E7EDF3",
+                color: companyName.trim() ? "#FFFFFF" : "#A7B8D1",
+                fontFamily: "var(--font-poppins), Poppins, sans-serif",
+                cursor: companyName.trim() ? "pointer" : "not-allowed",
+              }}
+            >
+              Research &amp; Add
+            </button>
+          </>
+        )}
+
+        {phase === "loading" && (
+          <div className="flex flex-col items-center gap-4 py-6">
+            <svg className="w-8 h-8 animate-spin" fill="none" viewBox="0 0 24 24" style={{ color: "#BDCF7C" }}>
+              <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+              <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+            </svg>
+            <div className="text-center">
+              <p
+                className="text-sm font-semibold mb-1"
+                style={{ fontFamily: "var(--font-poppins), Poppins, sans-serif", color: "#323B6A" }}
+              >
+                {companyName}
+              </p>
+              <p className="text-xs" style={{ color: "#6F92BF" }}>
+                {ADD_LEAD_STEPS[stepIdx]}
+              </p>
+            </div>
+            <div className="flex gap-1.5 mt-2">
+              {ADD_LEAD_STEPS.map((_, i) => (
+                <div
+                  key={i}
+                  className="h-1 rounded-full transition-all duration-500"
+                  style={{
+                    width: i <= stepIdx ? 24 : 8,
+                    backgroundColor: i <= stepIdx ? "#BDCF7C" : "#E7EDF3",
+                  }}
+                />
+              ))}
+            </div>
+          </div>
+        )}
+
+        {phase === "error" && (
+          <>
+            <p className="text-sm px-4 py-3 rounded-xl" style={{ backgroundColor: "#FFF0F0", color: "#CC4444" }}>
+              {error}
+            </p>
+            <button
+              onClick={() => { setPhase("idle"); setError(""); }}
+              className="text-sm py-2.5 rounded-xl font-semibold"
+              style={{ backgroundColor: "#E7EDF3", color: "#323B6A", fontFamily: "var(--font-poppins), Poppins, sans-serif" }}
+            >
+              Try again
+            </button>
+          </>
+        )}
+
+        {phase === "done" && result && (
+          <div className="flex flex-col gap-3">
+            <div
+              className="rounded-xl p-4"
+              style={{ backgroundColor: "#F6FAF0", border: "1.5px solid #BDCF7C" }}
+            >
+              <div className="flex items-start justify-between mb-2">
+                <div>
+                  <p
+                    className="font-bold text-sm mb-0.5"
+                    style={{ fontFamily: "var(--font-poppins), Poppins, sans-serif", color: "#323B6A" }}
+                  >
+                    {result.lead.companyName}
+                  </p>
+                  <p className="text-xs" style={{ color: "#6F92BF" }}>
+                    {result.lead.sector} · Score {result.lead.relevanceScore}/10 · {result.lead.confidence} confidence
+                  </p>
+                </div>
+                <span
+                  className="text-xs px-2 py-0.5 rounded-full font-semibold"
+                  style={{ backgroundColor: "#BDCF7C", color: "#323B6A" }}
+                >
+                  Added to pipeline
+                </span>
+              </div>
+              {result.lead.overview && (
+                <p className="text-xs leading-relaxed" style={{ color: "#323B6A" }}>
+                  {result.lead.overview}
+                </p>
+              )}
+              {result.lead.australiaPresence.detail && (
+                <p className="text-xs mt-1.5" style={{ color: "#6F92BF" }}>
+                  AU: {result.lead.australiaPresence.detail}
+                </p>
+              )}
+            </div>
+
+            {result.draft && (
+              <div
+                className="rounded-xl p-4"
+                style={{ backgroundColor: "#FAFBFC", border: "1px solid #E7EDF3" }}
+              >
+                <p
+                  className="text-xs font-semibold mb-2"
+                  style={{ fontFamily: "var(--font-poppins), Poppins, sans-serif", color: "#323B6A" }}
+                >
+                  Outreach draft ready
+                </p>
+                <p className="text-xs leading-relaxed whitespace-pre-wrap" style={{ color: "#6F92BF" }}>
+                  {result.draft.substring(0, 300)}{result.draft.length > 300 ? "…" : ""}
+                </p>
+              </div>
+            )}
+
+            <button
+              onClick={onClose}
+              className="w-full py-2.5 rounded-xl text-sm font-bold"
+              style={{
+                backgroundColor: "#323B6A",
+                color: "#FFFFFF",
+                fontFamily: "var(--font-poppins), Poppins, sans-serif",
+              }}
+            >
+              Done
+            </button>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
 // ── Pipeline view ─────────────────────────────────────────────────────────────
 
 const STATUS_META: Record<
@@ -1000,6 +1242,7 @@ function PipelineTab() {
   const [pipeline, setPipeline] = useState<PipelineLead[]>([]);
   const [showDismissed, setShowDismissed] = useState(false);
   const [loading, setLoading] = useState(true);
+  const [showAddModal, setShowAddModal] = useState(false);
 
   useEffect(() => {
     fetch("/api/bd/pipeline")
@@ -1009,16 +1252,39 @@ function PipelineTab() {
       .finally(() => setLoading(false));
   }, []);
 
+  const handleLeadAdded = (entry: PipelineLead) => {
+    setPipeline((prev) => {
+      const exists = prev.some((p) => p.id === entry.id);
+      return exists ? prev : [entry, ...prev];
+    });
+  };
+
   const active = pipeline.filter((l) => l.status !== "dismissed");
   const dismissed = pipeline.filter((l) => l.status === "dismissed");
   const visible = showDismissed ? pipeline : active;
 
-  // Sort: converted last, then by dateAdded desc
   const sorted = [...visible].sort((a, b) => {
     if (a.status === "converted" && b.status !== "converted") return 1;
     if (b.status === "converted" && a.status !== "converted") return -1;
     return new Date(b.dateAdded).getTime() - new Date(a.dateAdded).getTime();
   });
+
+  const AddLeadButton = () => (
+    <button
+      onClick={() => setShowAddModal(true)}
+      className="flex items-center gap-1.5 px-3 py-2 rounded-xl text-xs font-semibold"
+      style={{
+        backgroundColor: "#323B6A",
+        color: "#FFFFFF",
+        fontFamily: "var(--font-poppins), Poppins, sans-serif",
+      }}
+    >
+      <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M12 4v16m8-8H4" />
+      </svg>
+      Add Lead
+    </button>
+  );
 
   if (loading) {
     return (
@@ -1032,33 +1298,6 @@ function PipelineTab() {
     );
   }
 
-  if (pipeline.length === 0) {
-    return (
-      <div
-        className="rounded-2xl p-10 flex flex-col items-center text-center gap-4"
-        style={{ backgroundColor: "#FFFFFF", border: "1.5px dashed #E7EDF3" }}
-      >
-        <div
-          className="w-14 h-14 rounded-2xl flex items-center justify-center text-2xl"
-          style={{ backgroundColor: "#E7EDF3" }}
-        >
-          📋
-        </div>
-        <div>
-          <p
-            className="text-base font-semibold mb-1"
-            style={{ color: "#323B6A", fontFamily: "var(--font-poppins), Poppins, sans-serif" }}
-          >
-            Pipeline is empty
-          </p>
-          <p className="text-sm" style={{ color: "#A7B8D1" }}>
-            Detect signals in the Digest tab to start adding leads here automatically.
-          </p>
-        </div>
-      </div>
-    );
-  }
-
   // Status summary counts
   const counts = active.reduce(
     (acc, l) => { acc[l.status] = (acc[l.status] ?? 0) + 1; return acc; },
@@ -1066,42 +1305,80 @@ function PipelineTab() {
   );
 
   return (
-    <div className="flex flex-col gap-4">
-      {/* Summary bar */}
-      <div className="flex flex-wrap gap-2">
-        {(Object.keys(STATUS_META) as PipelineLead["status"][])
-          .filter((s) => s !== "dismissed" && counts[s])
-          .map((s) => (
-            <span
-              key={s}
-              className="text-xs px-2.5 py-1 rounded-full font-semibold"
-              style={{ backgroundColor: STATUS_META[s].bg, color: STATUS_META[s].color }}
-            >
-              {STATUS_META[s].label} {counts[s]}
-            </span>
-          ))}
-      </div>
-
-      {/* Lead rows */}
-      <div className="flex flex-col gap-2">
-        {sorted.map((lead) => (
-          <PipelineRow key={lead.id} lead={lead} />
-        ))}
-      </div>
-
-      {/* Dismissed toggle */}
-      {dismissed.length > 0 && (
-        <button
-          onClick={() => setShowDismissed((v) => !v)}
-          className="text-xs py-2 transition-all"
-          style={{ color: "#A7B8D1" }}
-        >
-          {showDismissed
-            ? `Hide dismissed (${dismissed.length})`
-            : `Show dismissed (${dismissed.length})`}
-        </button>
+    <>
+      {showAddModal && (
+        <AddLeadModal
+          onClose={() => setShowAddModal(false)}
+          onAdded={handleLeadAdded}
+        />
       )}
-    </div>
+
+      {pipeline.length === 0 ? (
+        <div
+          className="rounded-2xl p-10 flex flex-col items-center text-center gap-4"
+          style={{ backgroundColor: "#FFFFFF", border: "1.5px dashed #E7EDF3" }}
+        >
+          <div
+            className="w-14 h-14 rounded-2xl flex items-center justify-center text-2xl"
+            style={{ backgroundColor: "#E7EDF3" }}
+          >
+            📋
+          </div>
+          <div>
+            <p
+              className="text-base font-semibold mb-1"
+              style={{ color: "#323B6A", fontFamily: "var(--font-poppins), Poppins, sans-serif" }}
+            >
+              Pipeline is empty
+            </p>
+            <p className="text-sm mb-4" style={{ color: "#A7B8D1" }}>
+              Detect signals in the Digest tab to add leads automatically, or add one manually.
+            </p>
+            <AddLeadButton />
+          </div>
+        </div>
+      ) : (
+        <div className="flex flex-col gap-4">
+          {/* Summary bar + Add Lead button */}
+          <div className="flex items-center justify-between flex-wrap gap-2">
+            <div className="flex flex-wrap gap-2">
+              {(Object.keys(STATUS_META) as PipelineLead["status"][])
+                .filter((s) => s !== "dismissed" && counts[s])
+                .map((s) => (
+                  <span
+                    key={s}
+                    className="text-xs px-2.5 py-1 rounded-full font-semibold"
+                    style={{ backgroundColor: STATUS_META[s].bg, color: STATUS_META[s].color }}
+                  >
+                    {STATUS_META[s].label} {counts[s]}
+                  </span>
+                ))}
+            </div>
+            <AddLeadButton />
+          </div>
+
+          {/* Lead rows */}
+          <div className="flex flex-col gap-2">
+            {sorted.map((lead) => (
+              <PipelineRow key={lead.id} lead={lead} />
+            ))}
+          </div>
+
+          {/* Dismissed toggle */}
+          {dismissed.length > 0 && (
+            <button
+              onClick={() => setShowDismissed((v) => !v)}
+              className="text-xs py-2 transition-all"
+              style={{ color: "#A7B8D1" }}
+            >
+              {showDismissed
+                ? `Hide dismissed (${dismissed.length})`
+                : `Show dismissed (${dismissed.length})`}
+            </button>
+          )}
+        </div>
+      )}
+    </>
   );
 }
 

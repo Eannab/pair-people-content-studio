@@ -2,8 +2,9 @@ import { NextRequest, NextResponse } from "next/server";
 import Anthropic from "@anthropic-ai/sdk";
 import { kv } from "@vercel/kv";
 import { v4 as uuidv4 } from "uuid";
+import { detectBDSignals } from "@/lib/bd-signal-detection";
 import type { ScoredArticle } from "@/app/api/newsletters/scan/route";
-import type { BDLead, MarketInsightSignal, CompanySignal, AustraliaPresence } from "@/app/api/bd/signals/route";
+import type { BDLead, MarketInsightSignal } from "@/app/api/bd/signals/route";
 
 const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
 
@@ -138,7 +139,7 @@ Return ONLY the JSON array.`,
       } catch {}
     }
 
-    // ── Step 4: Signal detection on new articles ─────────────────────────────
+    // ── Steps 4-6: Research-first signal detection, then merge into KV ─────────
 
     const relevantNew = newArticles.filter((a) => a.topScore >= 4);
     if (relevantNew.length === 0) {
@@ -152,108 +153,19 @@ Return ONLY the JSON array.`,
       });
     }
 
-    const articleText = relevantNew
-      .map(
-        (a, i) =>
-          `${i + 1}. [${a.topSector.toUpperCase()}] "${a.title}" (${source})\n   ${a.summary}`
-      )
-      .join("\n\n");
+    const { bdLeads: detectedLeads, marketInsights: detectedInsights } =
+      await detectBDSignals(relevantNew);
 
-    const signalRes = await anthropic.messages.create({
-      model: "claude-sonnet-4-20250514",
-      max_tokens: 3000,
-      messages: [
-        {
-          role: "user",
-          content: `You are a BD analyst for Pair People, a Sydney tech recruitment agency.
-
-Analyse these articles for recruitment buying signals (funding announcements, active hiring, product launches that precede engineering hiring).
-
-Articles:
-${articleText}
-
-Classify each company as:
-- bdLead: AU-based or actively hiring in AU, AND under 200 employees
-- marketInsight: notable news but large/global, or no AU connection
-
-Return JSON:
-{
-  "bdLeads": [{
-    "companyName": "...",
-    "sector": "ai",
-    "signals": [{"type": "funded", "label": "Series A", "context": "...", "articleTitle": "...", "articleSource": "${source}"}],
-    "australiaPresence": {"basedInAustralia": true, "hiringInAustralia": true, "detail": "Sydney HQ"},
-    "initialRelevanceScore": 8
-  }],
-  "marketInsights": [{
-    "companyName": "...",
-    "sector": "ai",
-    "signals": [{"type": "launch", "label": "...", "context": "...", "articleTitle": "...", "articleSource": "${source}"}],
-    "whyExcluded": "Global company, 5000+ employees"
-  }]
-}
-
-If no signals found, return {"bdLeads": [], "marketInsights": []}.
-Return ONLY the JSON object — no markdown fences, no preamble.`,
-        },
-      ],
-    });
-
-    const signalRaw =
-      signalRes.content[0].type === "text" ? signalRes.content[0].text.trim() : "{}";
-    const signalClean = signalRaw.replace(/^```(?:json)?\n?/, "").replace(/\n?```$/, "");
-
-    let signalData: {
-      bdLeads: Array<{
-        companyName: string;
-        sector: string;
-        signals: CompanySignal[];
-        australiaPresence: AustraliaPresence;
-        initialRelevanceScore: number;
-      }>;
-      marketInsights: Array<{
-        companyName: string;
-        sector: string;
-        signals: CompanySignal[];
-        whyExcluded: string;
-      }>;
-    } = { bdLeads: [], marketInsights: [] };
-
-    try {
-      signalData = JSON.parse(signalClean);
-    } catch {}
-
-    // ── Step 5: Merge BD leads ───────────────────────────────────────────────
-
+    // Merge BD leads (skip duplicates already in KV)
     let existingLeads: BDLead[] = [];
     try {
       existingLeads = (await kv.get<BDLead[]>("bd:leads")) ?? [];
     } catch {}
 
-    const existingLeadNames = new Set(
-      existingLeads.map((l) => l.companyName.toLowerCase())
+    const existingLeadNames = new Set(existingLeads.map((l) => l.companyName.toLowerCase()));
+    const newLeads = detectedLeads.filter(
+      (l) => !existingLeadNames.has(l.companyName.toLowerCase())
     );
-    const newLeads: BDLead[] = (signalData.bdLeads ?? [])
-      .filter((d) => !existingLeadNames.has(d.companyName.toLowerCase()))
-      .map((d) => ({
-        id: uuidv4(),
-        companyName: d.companyName ?? "Unknown Company",
-        sector: (d.sector as BDLead["sector"]) ?? "general",
-        signals: d.signals ?? [],
-        australiaPresence: d.australiaPresence ?? {
-          basedInAustralia: false,
-          hiringInAustralia: false,
-          detail: "Location unclear",
-        },
-        overview: "",
-        techStack: [],
-        recentActivity: "",
-        relevanceScore: d.initialRelevanceScore ?? 5,
-        relevanceReason: "",
-        hiringContact: { name: "", title: "", linkedInUrl: "" },
-        confidence: "medium" as const,
-        createdAt: now,
-      }));
 
     if (newLeads.length > 0) {
       try {
@@ -262,7 +174,6 @@ Return ONLY the JSON object — no markdown fences, no preamble.`,
         });
       } catch {}
 
-      // Add new leads to pipeline
       try {
         const existingPipeline =
           (await kv.get<Array<{ id: string; companyName: string }>>("bd:pipeline")) ?? [];
@@ -289,42 +200,18 @@ Return ONLY the JSON object — no markdown fences, no preamble.`,
       } catch {}
     }
 
-    // ── Step 6: Merge market insights ────────────────────────────────────────
-
+    // Merge market insights (skip duplicates)
     let existingInsights: MarketInsightSignal[] = [];
     try {
-      existingInsights =
-        (await kv.get<MarketInsightSignal[]>("bd:market_insights")) ?? [];
+      existingInsights = (await kv.get<MarketInsightSignal[]>("bd:market_insights")) ?? [];
     } catch {}
 
     const existingInsightNames = new Set(
       existingInsights.map((i) => i.companyName.toLowerCase())
     );
-    const newInsights: MarketInsightSignal[] = (signalData.marketInsights ?? [])
-      .filter((d) => !existingInsightNames.has(d.companyName.toLowerCase()))
-      .map((d) => {
-        const topSignal = d.signals?.[0];
-        const postContext = [
-          `${d.companyName} — ${topSignal ? `${topSignal.label}: ${topSignal.context}` : "notable news"}`,
-          d.signals
-            .slice(1)
-            .map((s) => `${s.label}: ${s.context}`)
-            .join("\n"),
-          `Source: ${source}`,
-        ]
-          .filter(Boolean)
-          .join("\n\n");
-
-        return {
-          id: uuidv4(),
-          companyName: d.companyName ?? "Unknown Company",
-          sector: (d.sector as MarketInsightSignal["sector"]) ?? "general",
-          signals: d.signals ?? [],
-          whyExcluded: d.whyExcluded ?? "Does not meet BD criteria",
-          postContext,
-          createdAt: now,
-        };
-      });
+    const newInsights = detectedInsights.filter(
+      (i) => !existingInsightNames.has(i.companyName.toLowerCase())
+    );
 
     if (newInsights.length > 0) {
       try {
