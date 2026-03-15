@@ -23,6 +23,11 @@ export default function Home() {
     setActivePanel("create");
   };
 
+  const handleCreatePostFromBD = (context: string) => {
+    setContextSuggestion(context);
+    setActivePanel("create");
+  };
+
   return (
     <div className="flex min-h-screen" style={{ backgroundColor: "#E7EDF3" }}>
       {/* Sidebar */}
@@ -45,7 +50,7 @@ export default function Home() {
           <IntelligencePanel onUseForPost={handleUseForPost} />
         )}
         {activePanel === "research" && <ResearchPanel />}
-        {activePanel === "bd" && <BDPanel />}
+        {activePanel === "bd" && <BDPanel onCreatePost={handleCreatePostFromBD} />}
       </main>
     </div>
   );

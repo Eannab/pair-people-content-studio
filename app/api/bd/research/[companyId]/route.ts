@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import Anthropic from "@anthropic-ai/sdk";
 import { kv } from "@vercel/kv";
-import type { BDLead } from "@/app/api/bd/signals/route";
+import type { BDLead, AustraliaPresence } from "@/app/api/bd/signals/route";
 
 const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
 
@@ -90,6 +90,11 @@ Return a JSON object:
   "recentActivity": "1-2 sentences on their most recent notable activity (beyond the signal already captured)",
   "relevanceScore": 8,
   "relevanceReason": "one sharp sentence explaining why Pair People should reach out to this company right now",
+  "australiaPresence": {
+    "basedInAustralia": true,
+    "hiringInAustralia": true,
+    "detail": "Sydney HQ, Series A team of ~30"
+  },
   "hiringContact": {
     "name": "Jane Smith",
     "title": "CTO",
@@ -100,6 +105,7 @@ Return a JSON object:
 
 Rules:
 - relevanceScore 1-10: urgency and value of this lead for Pair People specifically
+- australiaPresence.detail: concise note on AU connection (e.g. "Sydney HQ", "Melbourne-based", "Hiring remotely in AU", "AU subsidiary"); use your best knowledge
 - hiringContact: the most senior person likely to receive a recruitment pitch — CTO, VP Engineering, Head of Engineering, or Founder for early-stage
 - linkedInUrl: your best guess at their LinkedIn profile URL, or empty string "" if genuinely unknown
 - confidence: "high" if you have solid data, "medium" if reasonable inference, "low" if mostly estimated
@@ -118,6 +124,7 @@ Rules:
       recentActivity: string;
       relevanceScore: number;
       relevanceReason: string;
+      australiaPresence?: AustraliaPresence;
       hiringContact: { name: string; title: string; linkedInUrl: string };
       confidence: "high" | "medium" | "low";
     } | null = null;
@@ -139,6 +146,8 @@ Rules:
       recentActivity: research!.recentActivity || lead.recentActivity,
       relevanceScore: research!.relevanceScore ?? lead.relevanceScore,
       relevanceReason: research!.relevanceReason || lead.relevanceReason,
+      // Refine australiaPresence if research found better data
+      australiaPresence: research!.australiaPresence ?? lead.australiaPresence,
       hiringContact: research!.hiringContact || lead.hiringContact,
       confidence: research!.confidence || lead.confidence,
       researchedAt: now,

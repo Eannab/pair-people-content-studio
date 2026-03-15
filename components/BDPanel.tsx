@@ -1,7 +1,7 @@
 "use client";
 
 import React, { useState, useEffect, useRef } from "react";
-import type { BDLead, CompanySignal } from "@/app/api/bd/signals/route";
+import type { BDLead, CompanySignal, MarketInsightSignal } from "@/app/api/bd/signals/route";
 
 // ── Sub-components ────────────────────────────────────────────────────────────
 
@@ -15,7 +15,11 @@ function SignalBadge({ signal }: { signal: CompanySignal }) {
   return (
     <span
       className="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-semibold"
-      style={{ backgroundColor: s.bg, color: s.color, fontFamily: "var(--font-poppins), Poppins, sans-serif" }}
+      style={{
+        backgroundColor: s.bg,
+        color: s.color,
+        fontFamily: "var(--font-poppins), Poppins, sans-serif",
+      }}
     >
       {signal.type === "funded" ? "⚡" : signal.type === "hiring" ? "👥" : "🚀"}{" "}
       {signal.label}
@@ -51,7 +55,7 @@ function ConfidenceDot({ confidence }: { confidence: BDLead["confidence"] }) {
   return (
     <span className="flex items-center gap-1.5 text-xs" style={{ color: "#6F92BF" }}>
       <span
-        className="inline-block w-2 h-2 rounded-full"
+        className="inline-block w-2 h-2 rounded-full flex-shrink-0"
         style={{ backgroundColor: colors[confidence] }}
       />
       {confidence.charAt(0).toUpperCase() + confidence.slice(1)} confidence
@@ -71,7 +75,10 @@ function RelevanceBar({ score }: { score: number }) {
           }}
         />
       </div>
-      <span className="text-xs font-semibold" style={{ color: "#323B6A", minWidth: "2ch" }}>
+      <span
+        className="text-xs font-semibold"
+        style={{ color: "#323B6A", minWidth: "2ch" }}
+      >
         {score}
       </span>
     </div>
@@ -93,6 +100,34 @@ function TechPill({ label }: { label: string }) {
   );
 }
 
+/** Flag shown on lead cards to indicate AU presence */
+function AUPresenceTag({
+  basedInAustralia,
+  hiringInAustralia,
+  detail,
+}: {
+  basedInAustralia: boolean;
+  hiringInAustralia: boolean;
+  detail: string;
+}) {
+  if (!basedInAustralia && !hiringInAustralia) return null;
+
+  return (
+    <span
+      className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-semibold"
+      style={{
+        backgroundColor: basedInAustralia ? "#EEF4FF" : "#F0F5EC",
+        color: basedInAustralia ? "#323B6A" : "#4A6B3A",
+        border: basedInAustralia ? "1px solid #A7B8D1" : "1px solid #BDCF7C",
+        fontFamily: "var(--font-poppins), Poppins, sans-serif",
+      }}
+      title={detail}
+    >
+      🇦🇺 {basedInAustralia ? detail || "AU-based" : "Hiring in AU"}
+    </span>
+  );
+}
+
 // ── Lead Card ─────────────────────────────────────────────────────────────────
 
 interface LeadCardProps {
@@ -103,6 +138,7 @@ interface LeadCardProps {
 
 function LeadCard({ lead, isResearching, onView }: LeadCardProps) {
   const isResearched = !!lead.researchedAt;
+  const ap = lead.australiaPresence;
 
   return (
     <div
@@ -115,7 +151,7 @@ function LeadCard({ lead, isResearching, onView }: LeadCardProps) {
     >
       {/* Header */}
       <div className="flex items-start justify-between gap-2">
-        <div className="flex flex-col gap-1">
+        <div className="flex flex-col gap-1.5">
           <h3
             className="text-base leading-tight"
             style={{
@@ -126,10 +162,24 @@ function LeadCard({ lead, isResearching, onView }: LeadCardProps) {
           >
             {lead.companyName}
           </h3>
-          <SectorTag sector={lead.sector} />
+          <div className="flex flex-wrap items-center gap-1.5">
+            <SectorTag sector={lead.sector} />
+            {ap && (ap.basedInAustralia || ap.hiringInAustralia) && (
+              <AUPresenceTag
+                basedInAustralia={ap.basedInAustralia}
+                hiringInAustralia={ap.hiringInAustralia}
+                detail={ap.detail}
+              />
+            )}
+          </div>
         </div>
         {isResearching && (
-          <svg className="w-4 h-4 animate-spin flex-shrink-0" fill="none" viewBox="0 0 24 24" style={{ color: "#6F92BF" }}>
+          <svg
+            className="w-4 h-4 animate-spin flex-shrink-0"
+            fill="none"
+            viewBox="0 0 24 24"
+            style={{ color: "#6F92BF" }}
+          >
             <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
             <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
           </svg>
@@ -151,7 +201,7 @@ function LeadCard({ lead, isResearching, onView }: LeadCardProps) {
         <RelevanceBar score={lead.relevanceScore} />
       </div>
 
-      {/* Reason & contact */}
+      {/* Researched data */}
       {isResearched && (
         <>
           {lead.relevanceReason && (
@@ -160,9 +210,23 @@ function LeadCard({ lead, isResearching, onView }: LeadCardProps) {
             </p>
           )}
           {lead.hiringContact.name && (
-            <div className="flex items-center gap-1.5 text-sm" style={{ color: "#323B6A" }}>
-              <svg className="w-4 h-4 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24" style={{ color: "#A7B8D1" }}>
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z" />
+            <div
+              className="flex items-center gap-1.5 text-sm"
+              style={{ color: "#323B6A" }}
+            >
+              <svg
+                className="w-4 h-4 flex-shrink-0"
+                fill="none"
+                stroke="currentColor"
+                viewBox="0 0 24 24"
+                style={{ color: "#A7B8D1" }}
+              >
+                <path
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  strokeWidth={2}
+                  d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z"
+                />
               </svg>
               <span style={{ fontWeight: 500 }}>{lead.hiringContact.name}</span>
               <span style={{ color: "#A7B8D1" }}>{lead.hiringContact.title}</span>
@@ -190,6 +254,86 @@ function LeadCard({ lead, isResearching, onView }: LeadCardProps) {
         }}
       >
         {isResearched ? "View Brief →" : "Researching..."}
+      </button>
+    </div>
+  );
+}
+
+// ── Market Insight Card ───────────────────────────────────────────────────────
+
+interface MarketInsightCardProps {
+  insight: MarketInsightSignal;
+  onCreatePost: (context: string) => void;
+}
+
+function MarketInsightCard({ insight, onCreatePost }: MarketInsightCardProps) {
+  return (
+    <div
+      className="rounded-2xl p-4 flex flex-col gap-3"
+      style={{
+        backgroundColor: "#FAFBFC",
+        border: "1.5px solid #E7EDF3",
+      }}
+    >
+      <div className="flex items-start justify-between gap-2">
+        <div className="flex flex-col gap-1.5">
+          <h4
+            className="text-sm leading-tight"
+            style={{
+              fontFamily: "var(--font-poppins), Poppins, sans-serif",
+              fontWeight: 600,
+              color: "#323B6A",
+            }}
+          >
+            {insight.companyName}
+          </h4>
+          <div className="flex flex-wrap items-center gap-1.5">
+            <SectorTag sector={insight.sector} />
+            <span
+              className="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-semibold"
+              style={{
+                backgroundColor: "#E7EDF3",
+                color: "#6F92BF",
+                fontFamily: "var(--font-poppins), Poppins, sans-serif",
+              }}
+            >
+              Market Insight
+            </span>
+          </div>
+        </div>
+      </div>
+
+      {/* Signals */}
+      <div className="flex flex-wrap gap-1.5">
+        {insight.signals.map((s, i) => (
+          <SignalBadge key={i} signal={s} />
+        ))}
+      </div>
+
+      {/* Why excluded */}
+      <p className="text-xs" style={{ color: "#A7B8D1" }}>
+        {insight.whyExcluded}
+      </p>
+
+      <button
+        onClick={() => onCreatePost(insight.postContext)}
+        className="w-full py-2 rounded-xl text-xs font-semibold transition-all"
+        style={{
+          backgroundColor: "#E7EDF3",
+          color: "#6F92BF",
+          fontFamily: "var(--font-poppins), Poppins, sans-serif",
+          border: "1px solid #A7B8D1",
+        }}
+        onMouseEnter={(e) => {
+          (e.currentTarget as HTMLButtonElement).style.backgroundColor = "#6F92BF";
+          (e.currentTarget as HTMLButtonElement).style.color = "#FFFFFF";
+        }}
+        onMouseLeave={(e) => {
+          (e.currentTarget as HTMLButtonElement).style.backgroundColor = "#E7EDF3";
+          (e.currentTarget as HTMLButtonElement).style.color = "#6F92BF";
+        }}
+      >
+        Create Post from this →
       </button>
     </div>
   );
@@ -239,7 +383,6 @@ function OutreachChat({ companyId, currentDraft, onDraftUpdate }: OutreachChatPr
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ message: msg, currentDraft }),
       });
-
       if (!res.ok) throw new Error("Thread request failed");
       const data = await res.json();
 
@@ -249,10 +392,7 @@ function OutreachChat({ companyId, currentDraft, onDraftUpdate }: OutreachChatPr
           content: m.role === "assistant" ? (data.reply || m.content) : m.content,
         }))
       );
-
-      if (data.updatedDraft) {
-        onDraftUpdate(data.updatedDraft);
-      }
+      if (data.updatedDraft) onDraftUpdate(data.updatedDraft);
     } catch {
       setHistory((h) => [
         ...h,
@@ -285,7 +425,10 @@ function OutreachChat({ companyId, currentDraft, onDraftUpdate }: OutreachChatPr
                   backgroundColor: msg.role === "user" ? "#323B6A" : "#FFFFFF",
                   color: msg.role === "user" ? "#FFFFFF" : "#323B6A",
                   border: msg.role === "assistant" ? "1.5px solid #E7EDF3" : "none",
-                  borderRadius: msg.role === "user" ? "1rem 1rem 0.25rem 1rem" : "1rem 1rem 1rem 0.25rem",
+                  borderRadius:
+                    msg.role === "user"
+                      ? "1rem 1rem 0.25rem 1rem"
+                      : "1rem 1rem 1rem 0.25rem",
                   whiteSpace: "pre-wrap",
                 }}
               >
@@ -321,7 +464,7 @@ function OutreachChat({ companyId, currentDraft, onDraftUpdate }: OutreachChatPr
           value={input}
           onChange={(e) => setInput(e.target.value)}
           onKeyDown={(e) => e.key === "Enter" && !e.shiftKey && sendMessage()}
-          placeholder="Make it shorter, more direct, change the hook..."
+          placeholder="Make it shorter, change the hook, be more direct..."
           className="flex-1 px-4 py-2.5 rounded-xl text-sm outline-none"
           style={{
             border: "1.5px solid #E7EDF3",
@@ -366,6 +509,7 @@ function LeadDetail({ lead, onBack, onLeadUpdate }: LeadDetailProps) {
   const [isDrafting, setIsDrafting] = useState(false);
   const [draftError, setDraftError] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
+  const ap = lead.australiaPresence;
 
   const generateDraft = async () => {
     setIsDrafting(true);
@@ -395,7 +539,7 @@ function LeadDetail({ lead, onBack, onLeadUpdate }: LeadDetailProps) {
       {/* Back */}
       <button
         onClick={onBack}
-        className="flex items-center gap-1.5 text-sm mb-6 transition-all"
+        className="flex items-center gap-1.5 text-sm mb-6"
         style={{ color: "#6F92BF" }}
       >
         <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -406,7 +550,7 @@ function LeadDetail({ lead, onBack, onLeadUpdate }: LeadDetailProps) {
 
       {/* Header */}
       <div className="mb-6">
-        <div className="flex items-center gap-3 mb-2">
+        <div className="flex flex-wrap items-center gap-3 mb-2">
           <h1
             className="text-2xl"
             style={{
@@ -418,6 +562,13 @@ function LeadDetail({ lead, onBack, onLeadUpdate }: LeadDetailProps) {
             {lead.companyName}
           </h1>
           <SectorTag sector={lead.sector} />
+          {ap && (ap.basedInAustralia || ap.hiringInAustralia) && (
+            <AUPresenceTag
+              basedInAustralia={ap.basedInAustralia}
+              hiringInAustralia={ap.hiringInAustralia}
+              detail={ap.detail}
+            />
+          )}
           <ConfidenceDot confidence={lead.confidence} />
         </div>
         <div className="flex flex-wrap gap-2">
@@ -489,7 +640,7 @@ function LeadDetail({ lead, onBack, onLeadUpdate }: LeadDetailProps) {
         )}
       </div>
 
-      {/* Signals detail */}
+      {/* Signals */}
       <div
         className="rounded-2xl p-5 mb-5"
         style={{ backgroundColor: "#FFFFFF", border: "1.5px solid #E7EDF3" }}
@@ -502,11 +653,10 @@ function LeadDetail({ lead, onBack, onLeadUpdate }: LeadDetailProps) {
         </h2>
         <div className="flex flex-col gap-3">
           {lead.signals.map((s, i) => (
-            <div
-              key={i}
-              className="flex gap-3"
-            >
-              <SignalBadge signal={s} />
+            <div key={i} className="flex gap-3">
+              <div className="flex-shrink-0 pt-0.5">
+                <SignalBadge signal={s} />
+              </div>
               <div>
                 <p className="text-sm" style={{ color: "#323B6A" }}>
                   {s.context}
@@ -542,7 +692,10 @@ function LeadDetail({ lead, onBack, onLeadUpdate }: LeadDetailProps) {
             <div>
               <p
                 className="text-sm font-semibold"
-                style={{ color: "#323B6A", fontFamily: "var(--font-poppins), Poppins, sans-serif" }}
+                style={{
+                  color: "#323B6A",
+                  fontFamily: "var(--font-poppins), Poppins, sans-serif",
+                }}
               >
                 {lead.hiringContact.name}
               </p>
@@ -555,7 +708,7 @@ function LeadDetail({ lead, onBack, onLeadUpdate }: LeadDetailProps) {
                 href={lead.hiringContact.linkedInUrl}
                 target="_blank"
                 rel="noopener noreferrer"
-                className="ml-auto flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-lg transition-all"
+                className="ml-auto flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-lg"
                 style={{
                   backgroundColor: "#E7EDF3",
                   color: "#6F92BF",
@@ -603,7 +756,7 @@ function LeadDetail({ lead, onBack, onLeadUpdate }: LeadDetailProps) {
             <button
               onClick={generateDraft}
               disabled={isDrafting}
-              className="flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-lg transition-all"
+              className="flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-lg"
               style={{
                 backgroundColor: isDrafting ? "#E7EDF3" : "#323B6A",
                 color: isDrafting ? "#A7B8D1" : "#FFFFFF",
@@ -660,9 +813,13 @@ function LeadDetail({ lead, onBack, onLeadUpdate }: LeadDetailProps) {
         ) : (
           <div
             className="h-28 rounded-xl flex items-center justify-center text-sm"
-            style={{ backgroundColor: "#FAFBFC", border: "1.5px dashed #E7EDF3", color: "#A7B8D1" }}
+            style={{
+              backgroundColor: "#FAFBFC",
+              border: "1.5px dashed #E7EDF3",
+              color: "#A7B8D1",
+            }}
           >
-            Click "Generate Draft" to create your outreach email
+            Click &ldquo;Generate Draft&rdquo; to create your outreach email
           </div>
         )}
       </div>
@@ -686,22 +843,28 @@ function LeadDetail({ lead, onBack, onLeadUpdate }: LeadDetailProps) {
 
 // ── Main BDPanel ──────────────────────────────────────────────────────────────
 
-export default function BDPanel() {
+interface BDPanelProps {
+  onCreatePost?: (context: string) => void;
+}
+
+export default function BDPanel({ onCreatePost }: BDPanelProps) {
   const [leads, setLeads] = useState<BDLead[]>([]);
+  const [marketInsights, setMarketInsights] = useState<MarketInsightSignal[]>([]);
   const [researchingIds, setResearchingIds] = useState<Set<string>>(new Set());
   const [isDetecting, setIsDetecting] = useState(false);
   const [detectError, setDetectError] = useState<string | null>(null);
   const [selectedLead, setSelectedLead] = useState<BDLead | null>(null);
   const [lastDetected, setLastDetected] = useState<string | null>(null);
 
-  // Load existing leads on mount
+  // Load existing data on mount
   useEffect(() => {
-    fetch("/api/bd/leads")
-      .then((r) => r.json())
-      .then((d) => {
-        if (d.leads?.length > 0) setLeads(d.leads);
-      })
-      .catch(() => {});
+    Promise.all([
+      fetch("/api/bd/leads").then((r) => r.json()).catch(() => ({ leads: [] })),
+      fetch("/api/bd/market-insights").then((r) => r.json()).catch(() => ({ insights: [] })),
+    ]).then(([leadsData, insightsData]) => {
+      if (leadsData.leads?.length > 0) setLeads(leadsData.leads);
+      if (insightsData.insights?.length > 0) setMarketInsights(insightsData.insights);
+    });
   }, []);
 
   // Keep selectedLead in sync with leads array
@@ -718,9 +881,7 @@ export default function BDPanel() {
       const res = await fetch(`/api/bd/research/${lead.id}`, { method: "POST" });
       if (!res.ok) return;
       const data = await res.json();
-      setLeads((prev) =>
-        prev.map((l) => (l.id === lead.id ? data.lead : l))
-      );
+      setLeads((prev) => prev.map((l) => (l.id === lead.id ? data.lead : l)));
     } catch {
       // Research failed — keep partial lead
     } finally {
@@ -743,10 +904,13 @@ export default function BDPanel() {
       }
       const data = await res.json();
       const newLeads: BDLead[] = data.leads ?? [];
+      const newInsights: MarketInsightSignal[] = data.marketInsights ?? [];
+
       setLeads(newLeads);
+      setMarketInsights(newInsights);
       setLastDetected(new Date().toISOString());
 
-      // Auto-research all detected leads in parallel
+      // Auto-research all BD leads in parallel
       newLeads.forEach((lead) => researchLead(lead));
     } catch (err) {
       setDetectError(err instanceof Error ? err.message : "Detection failed");
@@ -757,6 +921,10 @@ export default function BDPanel() {
 
   const updateLead = (updated: BDLead) => {
     setLeads((prev) => prev.map((l) => (l.id === updated.id ? updated : l)));
+  };
+
+  const handleCreatePost = (context: string) => {
+    onCreatePost?.(context);
   };
 
   if (selectedLead) {
@@ -770,6 +938,7 @@ export default function BDPanel() {
   }
 
   const sortedLeads = [...leads].sort((a, b) => b.relevanceScore - a.relevanceScore);
+  const isEmpty = leads.length === 0 && marketInsights.length === 0;
 
   return (
     <div className="max-w-3xl mx-auto px-6 py-8">
@@ -786,7 +955,7 @@ export default function BDPanel() {
           BD Intelligence
         </h1>
         <p className="text-sm" style={{ color: "#6F92BF" }}>
-          Detect funding, hiring, and launch signals from your newsletter scan. Research companies and draft outreach.
+          Detects funding, hiring, and launch signals from your newsletter scan. Australian startups and scale-ups become BD leads. Large or global companies surface as Market Insight content ideas.
         </p>
       </div>
 
@@ -795,20 +964,26 @@ export default function BDPanel() {
         <div>
           {lastDetected && (
             <p className="text-xs" style={{ color: "#A7B8D1" }}>
-              Last detected {new Date(lastDetected).toLocaleString("en-AU", { dateStyle: "short", timeStyle: "short" })}
+              Last detected{" "}
+              {new Date(lastDetected).toLocaleString("en-AU", {
+                dateStyle: "short",
+                timeStyle: "short",
+              })}
             </p>
           )}
-          {leads.length > 0 && !lastDetected && (
+          {!isEmpty && !lastDetected && (
             <p className="text-xs" style={{ color: "#A7B8D1" }}>
-              {leads.length} lead{leads.length !== 1 ? "s" : ""} from previous scan
+              {leads.length} lead{leads.length !== 1 ? "s" : ""} · {marketInsights.length} market insight
+              {marketInsights.length !== 1 ? "s" : ""}
             </p>
           )}
         </div>
         <div className="flex gap-2">
-          {leads.length > 0 && (
+          {!isEmpty && (
             <button
               onClick={() => {
                 setLeads([]);
+                setMarketInsights([]);
                 fetch("/api/bd/leads", { method: "DELETE" }).catch(() => {});
               }}
               className="text-xs px-3 py-2 rounded-xl transition-all"
@@ -842,7 +1017,7 @@ export default function BDPanel() {
                 <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 10V3L4 14h7v7l9-11h-7z" />
                 </svg>
-                {leads.length > 0 ? "Re-scan" : "Detect Signals"}
+                {!isEmpty ? "Re-scan" : "Detect Signals"}
               </>
             )}
           </button>
@@ -860,7 +1035,7 @@ export default function BDPanel() {
       )}
 
       {/* Empty state */}
-      {leads.length === 0 && !isDetecting && (
+      {isEmpty && !isDetecting && (
         <div
           className="rounded-2xl p-10 flex flex-col items-center text-center gap-4"
           style={{ backgroundColor: "#FFFFFF", border: "1.5px dashed #E7EDF3" }}
@@ -879,23 +1054,74 @@ export default function BDPanel() {
               No signals detected yet
             </p>
             <p className="text-sm" style={{ color: "#A7B8D1" }}>
-              Run a newsletter scan in the Intelligence tab first, then click Detect Signals to find funding, hiring, and launch activity.
+              Run a newsletter scan in the Market Intel tab first, then click Detect Signals.
             </p>
           </div>
         </div>
       )}
 
-      {/* Lead cards */}
+      {/* BD Leads section */}
       {sortedLeads.length > 0 && (
-        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-          {sortedLeads.map((lead) => (
-            <LeadCard
-              key={lead.id}
-              lead={lead}
-              isResearching={researchingIds.has(lead.id)}
-              onView={() => setSelectedLead(lead)}
-            />
-          ))}
+        <div className="mb-8">
+          <div className="flex items-center gap-2 mb-4">
+            <h2
+              className="text-sm font-semibold uppercase tracking-wider"
+              style={{ color: "#323B6A", fontFamily: "var(--font-poppins), Poppins, sans-serif" }}
+            >
+              BD Leads
+            </h2>
+            <span
+              className="text-xs px-2 py-0.5 rounded-full font-semibold"
+              style={{ backgroundColor: "#BDCF7C", color: "#323B6A" }}
+            >
+              {sortedLeads.length}
+            </span>
+            <span className="text-xs" style={{ color: "#A7B8D1" }}>
+              · AU-based or hiring in AU · under 200 people
+            </span>
+          </div>
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+            {sortedLeads.map((lead) => (
+              <LeadCard
+                key={lead.id}
+                lead={lead}
+                isResearching={researchingIds.has(lead.id)}
+                onView={() => setSelectedLead(lead)}
+              />
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* Market Insights section */}
+      {marketInsights.length > 0 && (
+        <div>
+          <div className="flex items-center gap-2 mb-4">
+            <h2
+              className="text-sm font-semibold uppercase tracking-wider"
+              style={{ color: "#323B6A", fontFamily: "var(--font-poppins), Poppins, sans-serif" }}
+            >
+              Market Insights
+            </h2>
+            <span
+              className="text-xs px-2 py-0.5 rounded-full font-semibold"
+              style={{ backgroundColor: "#E7EDF3", color: "#6F92BF" }}
+            >
+              {marketInsights.length}
+            </span>
+            <span className="text-xs" style={{ color: "#A7B8D1" }}>
+              · interesting news · not BD leads · great for content
+            </span>
+          </div>
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+            {marketInsights.map((insight) => (
+              <MarketInsightCard
+                key={insight.id}
+                insight={insight}
+                onCreatePost={handleCreatePost}
+              />
+            ))}
+          </div>
         </div>
       )}
     </div>

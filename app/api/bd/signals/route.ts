@@ -14,11 +14,18 @@ export interface CompanySignal {
   articleSource: string;
 }
 
+export interface AustraliaPresence {
+  basedInAustralia: boolean;
+  hiringInAustralia: boolean;
+  detail: string; // e.g. "Sydney HQ", "Hiring remotely in AU", "Melbourne-based"
+}
+
 export interface BDLead {
   id: string;
   companyName: string;
   sector: "defence" | "ai" | "healthtech" | "sydney" | "general";
   signals: CompanySignal[];
+  australiaPresence: AustraliaPresence;
   overview: string;
   techStack: string[];
   recentActivity: string;
@@ -36,6 +43,16 @@ export interface BDLead {
   createdAt: string;
 }
 
+export interface MarketInsightSignal {
+  id: string;
+  companyName: string;
+  sector: "defence" | "ai" | "healthtech" | "sydney" | "general";
+  signals: CompanySignal[];
+  whyExcluded: string; // e.g. "Large enterprise (10,000+ employees)", "No AU presence detected"
+  postContext: string; // pre-built context string for Create panel
+  createdAt: string;
+}
+
 export async function POST() {
   try {
     const articles = await kv.get<ScoredArticle[]>("newsletters:articles");
@@ -48,9 +65,8 @@ export async function POST() {
     }
 
     const relevant = articles.filter((a) => a.topScore >= 5);
-
     if (relevant.length === 0) {
-      return NextResponse.json({ leads: [], detected: 0 });
+      return NextResponse.json({ leads: [], marketInsights: [], detected: 0 });
     }
 
     const articleText = relevant
@@ -62,75 +78,118 @@ export async function POST() {
 
     const response = await anthropic.messages.create({
       model: "claude-sonnet-4-20250514",
-      max_tokens: 3000,
+      max_tokens: 4000,
       messages: [
         {
           role: "user",
-          content: `You are a BD intelligence analyst for Pair People, a Sydney-based tech recruitment agency that places engineers, CTOs, and tech leaders in Defence/DeepTech, AI/ML, Healthtech, and Sydney startups.
+          content: `You are a BD intelligence analyst for Pair People, a Sydney-based tech recruitment agency placing engineers and tech leaders in Australian startups and scale-ups (Defence/DeepTech, AI/ML, Healthtech, and the broader Sydney market).
 
-Analyse these newsletter articles and identify companies showing buying signals for tech recruitment:
-- Funding announcements (Seed, Series A/B/C, grants) — companies that just raised often need to hire quickly
-- Active hiring (job posts, team expansions, hiring sprees)
-- Product launches (new product, major release, pivot) — growth often precedes an engineering hiring push
+Analyse these newsletter articles to find companies showing recruitment buying signals: funding announcements, active hiring, or product launches that typically precede engineering hiring.
 
 Articles:
 ${articleText}
 
-For each company with a concrete, specific signal, return a JSON array:
-[{
-  "companyName": "Acme AI",
-  "sector": "ai",
-  "signals": [
+For each company with a concrete signal, classify it as either:
+
+A) **BD Lead** — meets ALL criteria:
+   1. Australian-based (HQ or main office in AU) OR actively hiring engineers in Australia
+   2. Startup or scale-up: estimated under 200 employees
+
+B) **Market Insight** — has notable news but does NOT meet BD criteria (large enterprise 200+ employees, global company with no AU hiring, etc.). These are still worth creating LinkedIn content about.
+
+Return a single JSON object:
+{
+  "bdLeads": [
     {
-      "type": "funded",
-      "label": "Series A",
-      "context": "exact quote or close paraphrase from the article showing this signal",
-      "articleTitle": "title of the article it came from",
-      "articleSource": "newsletter name"
+      "companyName": "Acme AI",
+      "sector": "ai",
+      "signals": [
+        {
+          "type": "funded",
+          "label": "Series A",
+          "context": "exact quote or close paraphrase from article",
+          "articleTitle": "article title",
+          "articleSource": "newsletter name"
+        }
+      ],
+      "australiaPresence": {
+        "basedInAustralia": true,
+        "hiringInAustralia": true,
+        "detail": "Sydney HQ"
+      },
+      "initialRelevanceScore": 8
     }
   ],
-  "initialRelevanceScore": 7
-}]
+  "marketInsights": [
+    {
+      "companyName": "OpenAI",
+      "sector": "ai",
+      "signals": [
+        {
+          "type": "launch",
+          "label": "GPT-5 release",
+          "context": "...",
+          "articleTitle": "...",
+          "articleSource": "..."
+        }
+      ],
+      "whyExcluded": "Global company, 3000+ employees, no AU-specific hiring mentioned"
+    }
+  ]
+}
 
 Rules:
-- Only include companies with concrete signals — not vague mentions
-- sector must be one of: "defence", "ai", "healthtech", "sydney", "general"
-- type must be: "funded", "hiring", or "launch"
-- label examples: "Series A", "Seed Round", "CTO hire", "Head of Eng role", "Product launch", "v2.0 release"
-- One company can have multiple signals across multiple articles
-- initialRelevanceScore 1-10: how valuable is this lead for Pair People right now?
-- Return ONLY the JSON array — no markdown fences, no preamble.`,
+- Only include companies with concrete, specific signals — not vague mentions
+- sector: "defence" | "ai" | "healthtech" | "sydney" | "general"
+- signal type: "funded" | "hiring" | "launch"
+- label examples: "Series A", "Seed Round", "CTO hire", "Head of Eng role", "Product launch"
+- For australiaPresence: use article evidence first, then your knowledge; if uncertain set basedInAustralia: false, hiringInAustralia: false, detail: "Location unclear"
+- whyExcluded: one sentence explaining why this is market insight only (company size, no AU presence, etc.)
+- initialRelevanceScore 1-10 for bdLeads only
+- Return ONLY the JSON object — no markdown fences, no preamble.`,
         },
       ],
     });
 
     const raw =
-      response.content[0].type === "text" ? response.content[0].text.trim() : "[]";
+      response.content[0].type === "text" ? response.content[0].text.trim() : "{}";
     const clean = raw.replace(/^```(?:json)?\n?/, "").replace(/\n?```$/, "");
 
-    let detected: Array<{
-      companyName: string;
-      sector: string;
-      signals: CompanySignal[];
-      initialRelevanceScore: number;
-    }> = [];
+    let parsed: {
+      bdLeads: Array<{
+        companyName: string;
+        sector: string;
+        signals: CompanySignal[];
+        australiaPresence: AustraliaPresence;
+        initialRelevanceScore: number;
+      }>;
+      marketInsights: Array<{
+        companyName: string;
+        sector: string;
+        signals: CompanySignal[];
+        whyExcluded: string;
+      }>;
+    } = { bdLeads: [], marketInsights: [] };
 
     try {
-      detected = JSON.parse(clean);
+      parsed = JSON.parse(clean);
     } catch {
-      return NextResponse.json({ leads: [], detected: 0 });
-    }
-
-    if (!Array.isArray(detected) || detected.length === 0) {
-      return NextResponse.json({ leads: [], detected: 0 });
+      return NextResponse.json({ leads: [], marketInsights: [], detected: 0 });
     }
 
     const now = new Date().toISOString();
-    const partialLeads: BDLead[] = detected.map((d) => ({
+
+    // Build BD leads
+    const bdLeads: BDLead[] = (parsed.bdLeads ?? []).map((d) => ({
       id: uuidv4(),
       companyName: d.companyName ?? "Unknown Company",
       sector: (d.sector as BDLead["sector"]) ?? "general",
       signals: d.signals ?? [],
+      australiaPresence: d.australiaPresence ?? {
+        basedInAustralia: false,
+        hiringInAustralia: false,
+        detail: "Location unclear",
+      },
       overview: "",
       techStack: [],
       recentActivity: "",
@@ -141,11 +200,38 @@ Rules:
       createdAt: now,
     }));
 
+    // Build market insights
+    const marketInsights: MarketInsightSignal[] = (parsed.marketInsights ?? []).map((d) => {
+      const topSignal = d.signals?.[0];
+      const postContext = [
+        `${d.companyName} — ${topSignal ? `${topSignal.label}: ${topSignal.context}` : "notable news"}`,
+        d.signals.slice(1).map((s) => `${s.label}: ${s.context}`).join("\n"),
+        topSignal ? `Source: ${topSignal.articleSource}` : "",
+      ]
+        .filter(Boolean)
+        .join("\n\n");
+
+      return {
+        id: uuidv4(),
+        companyName: d.companyName ?? "Unknown Company",
+        sector: (d.sector as MarketInsightSignal["sector"]) ?? "general",
+        signals: d.signals ?? [],
+        whyExcluded: d.whyExcluded ?? "Does not meet BD criteria",
+        postContext,
+        createdAt: now,
+      };
+    });
+
     try {
-      await kv.set("bd:leads", partialLeads, { ex: 60 * 60 * 24 * 30 });
+      await kv.set("bd:leads", bdLeads, { ex: 60 * 60 * 24 * 30 });
+      await kv.set("bd:market_insights", marketInsights, { ex: 60 * 60 * 24 * 30 });
     } catch {}
 
-    return NextResponse.json({ leads: partialLeads, detected: partialLeads.length });
+    return NextResponse.json({
+      leads: bdLeads,
+      marketInsights,
+      detected: bdLeads.length + marketInsights.length,
+    });
   } catch (err) {
     console.error("bd/signals error:", err);
     return NextResponse.json(
