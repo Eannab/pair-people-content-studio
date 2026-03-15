@@ -5,6 +5,7 @@ export interface CVCandidate {
   id: string;
   name: string;
   currentRole: string;
+  currentEmployer: string;
   yearsExperience: number;
   skills: string[];
   sectorExperience: string[];

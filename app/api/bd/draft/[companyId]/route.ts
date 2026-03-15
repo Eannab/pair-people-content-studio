@@ -63,8 +63,44 @@ export async function POST(
 
     const voiceSection = outreachVoiceContext || "";
 
-    // CV matches
+    // CV matches — pick top 1, pre-compute relevant skill overlap
     const cvMatches = await getTopCVMatches(lead, 1, 7);
+    const candidate = cvMatches[0]?.candidate ?? null;
+
+    // Cross-reference: only surface skills that map to the company's tech stack
+    const leadStack = lead.techStack.map((t) => t.toLowerCase());
+    const relevantSkills = candidate
+      ? candidate.skills.filter((s) =>
+          leadStack.some(
+            (t) =>
+              t.includes(s.toLowerCase()) || s.toLowerCase().includes(t)
+          )
+        )
+      : [];
+    // Fall back to top skills if overlap is thin
+    const skillsToShow =
+      relevantSkills.length >= 2
+        ? relevantSkills.slice(0, 5)
+        : (candidate?.skills ?? []).slice(0, 5);
+
+    // Extract hiring role from signal context if signal type is "hiring"
+    const hiringRole =
+      signalHook?.type === "hiring" ? signalHook.context : "";
+
+    // Employer line — "currently at X" or "just left X"
+    const employerLine =
+      candidate?.currentEmployer
+        ? `currently at ${candidate.currentEmployer}`
+        : "";
+
+    const candidateBlock = candidate
+      ? `Candidate to pitch:
+- Name: ${candidate.name}
+- Role: ${candidate.seniority} ${candidate.currentRole}${employerLine ? `, ${employerLine}` : ""}
+- Experience: ${candidate.yearsExperience} years
+- Relevant skills (matched to ${lead.companyName}'s stack): ${skillsToShow.join(", ")}
+- Fit reason: ${cvMatches[0].fitExplanation}`
+      : "";
 
     const response = await anthropic.messages.create({
       model: "claude-sonnet-4-20250514",
@@ -74,34 +110,41 @@ export async function POST(
           role: "user",
           content: `Write a cold outreach email from Éanna (co-founder, Pair People) to the hiring contact at ${lead.companyName}.
 
-Signal (use this as the opening hook — be specific, name the actual detail):
-${hookContext}
+COMPANY CONTEXT — use this to write the opening:
+- What they build: ${lead.overview || `${lead.companyName} — a ${lead.sector} company`}
+- Tech stack: ${lead.techStack.join(", ") || "unknown"}
+- Signal: ${hookContext}${hiringRole ? `\n- Role they're hiring for: ${hiringRole}` : ""}
+- Recent activity: ${lead.recentActivity || ""}
 
-Contact: ${lead.hiringContact.name || "the hiring manager"}, ${lead.hiringContact.title || ""}
-${cvMatches.length > 0 ? `\nCandidate to introduce:\n${cvMatches.map((m) => `- ${m.candidate.name}, ${m.candidate.seniority} ${m.candidate.currentRole}, ${m.candidate.yearsExperience} years exp — ${m.fitExplanation}\n  Skills: ${m.candidate.skills?.slice(0, 6).join(", ") ?? ""}`).join("\n")}` : ""}
+Contact: ${lead.hiringContact.name || "the hiring manager"}${lead.hiringContact.title ? `, ${lead.hiringContact.title}` : ""}
+
+${candidateBlock}
 ${voiceSection}${prefSection}
 
 STRICT RULES — follow every one without exception:
 
 1. MAXIMUM 100 WORDS TOTAL. Count carefully. Cut ruthlessly.
 
-2. OPENING: Reference the specific signal detail (the exact funding amount, the exact role title, the exact product name). Not "saw you're hiring" or "noticed you're growing" — name the actual thing.
+2. OPENING: Describe what ${lead.companyName} specifically builds or does — use the "What they build" field above. Write it as if you've actually looked at the company. Never open with "I saw your job posting" or "noticed you're growing". Lead with the product/platform/technology they're building.
+   Example format: "Saw [Company] is building [specific product] on [tech] — [brief why it's interesting]."
 
-3. STRUCTURE:
-   - 1 sentence: signal hook
-   - 1 sentence: "I have a [role] who might be relevant" — introduce the candidate, not Pair People
-   - 2-3 tight bullet points: candidate's specific skills, experience, and background ONLY
+3. HIRING ROLE: If a role is listed above, reference it specifically (e.g. "building out your [role] team").
+
+4. STRUCTURE:
+   - 1 sentence: what the company builds + why you're reaching out now
+   - 1 sentence: introduce the candidate by name, role, and current/recent employer
+   - 2-3 tight bullet points: candidate's skills and experience that are directly relevant to ${lead.companyName}'s stack
    - 1 closing line
 
-4. BULLET POINTS: Only used for the candidate's credentials. Never for Pair People's services, process, or value proposition.
+5. CANDIDATE INTRO SENTENCE must include their current or most recent employer if known: "I have [Name], a [seniority] [role] currently at [Employer]" or "just left [Employer]".
 
-5. NEVER WRITE: "48-hour turnaround", "pre-vetted", "quality over volume", "boutique", "specialist in", "we work with", "our process", fees, turnaround times, or any description of Pair People as an agency.
+6. BULLET POINTS: Only used for the candidate's specific skills, experience, and background. Never for Pair People's services, process, or value proposition.
 
-6. CLOSING LINE: Must be exactly "Any interest in seeing their CV?" or "Worth 15 mins?" — nothing else.
+7. NEVER WRITE: "48-hour turnaround", "pre-vetted", "quality over volume", "boutique", "specialist in", "we work with", "our process", fees, turnaround times, or any description of Pair People as an agency.
 
-7. SIGN OFF: "Cheers, Éanna" — no title, no phone number, no website, nothing else.
+8. CLOSING LINE: Must be exactly "Any interest in seeing their CV?" or "Worth 15 mins?" — nothing else.
 
-8. The email is about the CANDIDATE. Pair People is barely mentioned if at all.
+9. SIGN OFF: "Cheers, Éanna" — no title, no phone number, no website, nothing else.
 
 Return ONLY the email body text. No subject line.`,
         },

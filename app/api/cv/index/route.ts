@@ -117,8 +117,9 @@ export async function POST(request: NextRequest) {
             {
               role: "user",
               content: `Extract candidate info from this CV. Return JSON only:
-{"name":"...", "currentRole":"...", "yearsExperience":5, "skills":["TypeScript","React"], "sectorExperience":["fintech","healthtech"], "location":"Sydney, Australia", "seniority":"senior"}
+{"name":"...", "currentRole":"...", "currentEmployer":"...", "yearsExperience":5, "skills":["TypeScript","React"], "sectorExperience":["fintech","healthtech"], "location":"Sydney, Australia", "seniority":"senior"}
 
+currentEmployer: the name of the company where they currently work or most recently worked.
 seniority options: "junior" (0-2yr), "mid" (2-5yr), "senior" (5-10yr), "lead" (team lead), "principal" (staff+)
 
 CV text:
@@ -148,6 +149,7 @@ Return ONLY the JSON object.`,
           id: uuidv4(),
           name: extracted.name ?? file.name,
           currentRole: extracted.currentRole ?? "",
+          currentEmployer: extracted.currentEmployer ?? "",
           yearsExperience: extracted.yearsExperience ?? 0,
           skills: extracted.skills ?? [],
           sectorExperience: extracted.sectorExperience ?? [],
