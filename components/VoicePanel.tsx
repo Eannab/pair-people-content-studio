@@ -2,6 +2,7 @@
 
 import React, { useState, useEffect, useRef } from "react";
 import type { VoiceProfile } from "@/app/api/voice/profile/route";
+import type { OutreachVoiceProfile } from "@/app/api/voice/outreach/route";
 
 type Stage =
   | "idle"        // no posts in KV
@@ -10,6 +11,8 @@ type Stage =
   | "profiling"
   | "ready"       // profile exists
   | "error";
+
+type OutreachStage = "idle" | "scanning" | "ready" | "error";
 
 function PillList({ items, color }: { items: string[]; color: string }) {
   return (
@@ -53,20 +56,37 @@ export default function VoicePanel() {
   const [isDragOver, setIsDragOver] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
+  const [outreachStage, setOutreachStage] = useState<OutreachStage>("idle");
+  const [outreachProfile, setOutreachProfile] = useState<OutreachVoiceProfile | null>(null);
+  const [outreachError, setOutreachError] = useState("");
+
   // Load existing data on mount
   useEffect(() => {
     (async () => {
       try {
-        const res = await fetch("/api/voice/profile");
-        if (!res.ok) return;
-        const data = await res.json();
-        if (data.profile) {
-          setProfile(data.profile);
-          setPostCount(data.profile.postCount);
-          setStage("ready");
-        } else if (data.postCount > 0) {
-          setPostCount(data.postCount);
-          setStage("uploaded");
+        const [profileRes, outreachRes] = await Promise.allSettled([
+          fetch("/api/voice/profile"),
+          fetch("/api/voice/outreach"),
+        ]);
+
+        if (profileRes.status === "fulfilled" && profileRes.value.ok) {
+          const data = await profileRes.value.json();
+          if (data.profile) {
+            setProfile(data.profile);
+            setPostCount(data.profile.postCount);
+            setStage("ready");
+          } else if (data.postCount > 0) {
+            setPostCount(data.postCount);
+            setStage("uploaded");
+          }
+        }
+
+        if (outreachRes.status === "fulfilled" && outreachRes.value.ok) {
+          const data = await outreachRes.value.json();
+          if (data.profile) {
+            setOutreachProfile(data.profile);
+            setOutreachStage("ready");
+          }
         }
       } catch {
         // KV not available — stay idle
@@ -112,6 +132,23 @@ export default function VoicePanel() {
     } catch (err) {
       setErrorMsg(err instanceof Error ? err.message : "Profile generation failed");
       setStage("error");
+    }
+  };
+
+  const scanOutreachStyle = async () => {
+    setOutreachStage("scanning");
+    setOutreachError("");
+    try {
+      const res = await fetch("/api/voice/outreach", { method: "POST" });
+      const data = await res.json();
+      if (!res.ok) {
+        throw new Error(data.error ?? "Outreach scan failed");
+      }
+      setOutreachProfile(data.profile);
+      setOutreachStage("ready");
+    } catch (err) {
+      setOutreachError(err instanceof Error ? err.message : "Scan failed");
+      setOutreachStage("error");
     }
   };
 
@@ -273,6 +310,206 @@ export default function VoicePanel() {
           </button>
         </div>
       )}
+
+      {/* ── Outreach Style section ────────────────────────────────────────── */}
+      <div className="mt-8 mb-6">
+        <h2
+          className="text-lg mb-1"
+          style={{
+            fontFamily: "var(--font-poppins), Poppins, sans-serif",
+            fontWeight: 700,
+            color: "#323B6A",
+          }}
+        >
+          Outreach Style
+        </h2>
+        <p className="text-sm mb-4" style={{ color: "#6F92BF" }}>
+          Scan your Outlook sent folder to learn your actual email outreach style. All emails are anonymised before analysis.
+        </p>
+
+        {/* Scan / Refresh button */}
+        {outreachStage !== "scanning" && (
+          <button
+            onClick={scanOutreachStyle}
+            className="flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-semibold transition-all duration-150 mb-4"
+            style={{
+              backgroundColor: outreachProfile ? "transparent" : "#BDCF7C",
+              color: outreachProfile ? "#323B6A" : "#323B6A",
+              border: outreachProfile ? "1.5px solid #A7B8D1" : "none",
+              fontFamily: "var(--font-poppins), Poppins, sans-serif",
+              fontWeight: 600,
+            }}
+          >
+            {outreachProfile ? (
+              <>
+                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
+                    d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+                </svg>
+                Refresh Outreach Style
+              </>
+            ) : (
+              <>
+                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
+                    d="M3 8l7.89 5.26a2 2 0 002.22 0L21 8M5 19h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z" />
+                </svg>
+                Scan Sent Emails
+              </>
+            )}
+          </button>
+        )}
+
+        {/* Scanning spinner */}
+        {outreachStage === "scanning" && (
+          <div
+            className="rounded-xl px-5 py-4 flex items-center gap-3 mb-4"
+            style={{ backgroundColor: "#FFFFFF", border: "1.5px solid #E7EDF3" }}
+          >
+            <svg className="w-5 h-5 animate-spin flex-shrink-0" fill="none" viewBox="0 0 24 24">
+              <circle className="opacity-25" cx="12" cy="12" r="10" stroke="#BDCF7C" strokeWidth="4" />
+              <path className="opacity-75" fill="#BDCF7C" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+            </svg>
+            <div>
+              <p className="text-sm font-semibold" style={{ color: "#323B6A", fontFamily: "var(--font-poppins), Poppins, sans-serif" }}>
+                Scanning sent emails…
+              </p>
+              <p className="text-xs mt-0.5" style={{ color: "#6F92BF" }}>
+                Fetching sent items, detecting replies, anonymising and analysing. Takes 20–40 seconds.
+              </p>
+            </div>
+          </div>
+        )}
+
+        {/* Outreach error */}
+        {outreachStage === "error" && (
+          <div
+            className="rounded-xl px-5 py-4 mb-4"
+            style={{ backgroundColor: "#FFF0F0", border: "1px solid #FFCCCC" }}
+          >
+            <p className="text-sm font-semibold" style={{ color: "#CC4444" }}>Scan failed</p>
+            <p className="text-sm mt-0.5" style={{ color: "#CC4444" }}>{outreachError}</p>
+          </div>
+        )}
+
+        {/* Outreach Profile card */}
+        {outreachStage === "ready" && outreachProfile && (
+          <div
+            className="rounded-xl overflow-hidden"
+            style={{ backgroundColor: "#FFFFFF", border: "1.5px solid #E7EDF3" }}
+          >
+            {/* Card header */}
+            <div
+              className="px-5 py-4"
+              style={{ backgroundColor: "#323B6A" }}
+            >
+              <p className="text-sm font-bold text-white" style={{ fontFamily: "var(--font-poppins), Poppins, sans-serif" }}>
+                Outreach Voice Profile
+              </p>
+              <p className="text-xs mt-0.5" style={{ color: "#A7B8D1" }}>
+                Analysed {outreachProfile.emailsAnalysed} emails · {formatDate(outreachProfile.generatedAt)}
+              </p>
+            </div>
+
+            {/* Metrics row */}
+            <div
+              className="px-5 py-3 flex gap-6 flex-wrap"
+              style={{ backgroundColor: "#F9FAFB", borderBottom: "1px solid #E7EDF3" }}
+            >
+              <div>
+                <p className="text-xs font-semibold uppercase tracking-wider" style={{ color: "#6F92BF", fontFamily: "var(--font-poppins), Poppins, sans-serif" }}>
+                  Emails analysed
+                </p>
+                <p className="text-lg font-bold mt-0.5" style={{ color: "#323B6A", fontFamily: "var(--font-poppins), Poppins, sans-serif" }}>
+                  {outreachProfile.emailsAnalysed}
+                </p>
+              </div>
+              <div>
+                <p className="text-xs font-semibold uppercase tracking-wider" style={{ color: "#6F92BF", fontFamily: "var(--font-poppins), Poppins, sans-serif" }}>
+                  Replies detected
+                </p>
+                <p className="text-lg font-bold mt-0.5" style={{ color: "#323B6A", fontFamily: "var(--font-poppins), Poppins, sans-serif" }}>
+                  {outreachProfile.repliesDetected}
+                </p>
+              </div>
+              <div>
+                <p className="text-xs font-semibold uppercase tracking-wider" style={{ color: "#6F92BF", fontFamily: "var(--font-poppins), Poppins, sans-serif" }}>
+                  Response rate
+                </p>
+                <p className="text-lg font-bold mt-0.5" style={{ color: "#BDCF7C", fontFamily: "var(--font-poppins), Poppins, sans-serif" }}>
+                  {outreachProfile.responseRate.split("%")[0]}%
+                </p>
+              </div>
+            </div>
+
+            {/* Profile fields */}
+            <div className="px-5">
+              <ProfileSection label="Tone">
+                <p className="text-sm" style={{ color: "#323B6A" }}>{outreachProfile.tone}</p>
+              </ProfileSection>
+
+              <ProfileSection label="Typical Length">
+                <p className="text-sm" style={{ color: "#323B6A" }}>{outreachProfile.typicalLength}</p>
+              </ProfileSection>
+
+              <ProfileSection label="Email Structure">
+                <p className="text-sm" style={{ color: "#323B6A" }}>{outreachProfile.typicalStructure}</p>
+              </ProfileSection>
+
+              <ProfileSection label="Opening Style">
+                <p className="text-sm" style={{ color: "#323B6A" }}>{outreachProfile.openingStyle}</p>
+              </ProfileSection>
+
+              <ProfileSection label="How You Describe Candidates">
+                <p className="text-sm" style={{ color: "#323B6A" }}>{outreachProfile.candidateDescriptionStyle}</p>
+              </ProfileSection>
+
+              <ProfileSection label="How You Describe Companies">
+                <p className="text-sm" style={{ color: "#323B6A" }}>{outreachProfile.companyDescriptionStyle}</p>
+              </ProfileSection>
+
+              <ProfileSection label="CTA Style">
+                <p className="text-sm" style={{ color: "#323B6A" }}>{outreachProfile.ctaStyle}</p>
+              </ProfileSection>
+
+              {outreachProfile.topPerformingPatterns?.length > 0 && (
+                <ProfileSection label="Top Performing Patterns">
+                  <ul className="space-y-1 mt-1.5">
+                    {outreachProfile.topPerformingPatterns.map((p) => (
+                      <li key={p} className="flex items-start gap-2 text-sm" style={{ color: "#323B6A" }}>
+                        <span style={{ color: "#BDCF7C", flexShrink: 0, marginTop: 2 }}>✓</span>
+                        {p}
+                      </li>
+                    ))}
+                  </ul>
+                </ProfileSection>
+              )}
+
+              {outreachProfile.lowPerformingPatterns?.length > 0 && (
+                <ProfileSection label="Patterns Without Replies">
+                  <ul className="space-y-1 mt-1.5">
+                    {outreachProfile.lowPerformingPatterns.map((p) => (
+                      <li key={p} className="flex items-start gap-2 text-sm" style={{ color: "#323B6A" }}>
+                        <span style={{ color: "#A7B8D1", flexShrink: 0, marginTop: 2 }}>›</span>
+                        {p}
+                      </li>
+                    ))}
+                  </ul>
+                </ProfileSection>
+              )}
+
+              {outreachProfile.distinctivePhrases?.length > 0 && (
+                <div className="py-3">
+                  <p className="text-xs font-semibold uppercase tracking-wider mb-1" style={{ color: "#6F92BF", fontFamily: "var(--font-poppins), Poppins, sans-serif" }}>
+                    Distinctive Phrases & Patterns
+                  </p>
+                  <PillList items={outreachProfile.distinctivePhrases} color="#E7EDF3" />
+                </div>
+              )}
+            </div>
+          </div>
+        )}
+      </div>
 
       {/* ── Voice Profile card ────────────────────────────────────────────── */}
       {stage === "ready" && profile && (

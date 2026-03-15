@@ -5,6 +5,7 @@ import { getSessionUser, uk, unauthorized } from "@/lib/user-key";
 import type { BDLead } from "@/app/api/bd/signals/route";
 import type { OutreachPreferences } from "@/app/api/bd/preferences/route";
 import { getTopCVMatches } from "@/lib/cv-context";
+import { getOutreachVoiceContext } from "@/lib/outreach-voice-context";
 
 const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
 
@@ -36,9 +37,10 @@ export async function POST(
   try {
     const { companyId } = await params;
 
-    const [leads, preferences] = await Promise.all([
+    const [leads, preferences, outreachVoiceContext] = await Promise.all([
       kv.get<BDLead[]>("bd:leads"),
       kv.get<OutreachPreferences>(uk(user.email, "bd:outreach_preferences")).catch(() => null),
+      getOutreachVoiceContext(user.email),
     ]);
 
     if (!leads) {
@@ -68,6 +70,8 @@ export async function POST(
       ? `\n\n${user.name}'s outreach preferences (from previous conversations):\n${preferences.rawPreferences}`
       : "";
 
+    const voiceSection = outreachVoiceContext || "";
+
     // CV matches
     const cvMatches = await getTopCVMatches(lead, 2, 7);
     const cvSection =
@@ -94,10 +98,10 @@ Company context:
 - Signal: ${hookContext}
 - Contact: ${lead.hiringContact.name || "the hiring manager"}, ${lead.hiringContact.title || "CTO/Head of Engineering"}
 - Why reach out now: ${lead.relevanceReason || `strong signal in ${lead.sector}`}
-${prefSection}${cvSection}
+${prefSection}${voiceSection}${cvSection}
 
 Write the email body only (no subject line). Requirements:
-- 100-120 words total
+- Match the word count and structure from the outreach style above (if available), otherwise aim for 100-120 words
 - First sentence: a research hook referencing the signal (funding round, product launch, or new hire) — show you've done your homework
 - Next 1-2 sentences: introduce ${user.name} and Pair People in third person — "boutique Sydney tech recruitment agency", quality over volume, specialist in ${sectorSpecialism} talent
 - 3 bullet points on what Pair People offers (under 15 words each, concrete and specific)
