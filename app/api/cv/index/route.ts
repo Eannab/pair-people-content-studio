@@ -33,23 +33,35 @@ export async function POST(request: NextRequest) {
     const folderPath = settings?.folderPath?.trim() || "/Active CVs";
 
     // ── List files in the OneDrive folder ────────────────────────────────────
-    const encodedPath = encodeURIComponent(folderPath);
+    // Encode each path segment individually so slashes are preserved as
+    // separators and special characters (spaces, apostrophes, etc.) are safe.
+    const encodedPath = folderPath
+      .replace(/^\/+/, "")           // strip leading slashes
+      .split("/")
+      .map((seg) => encodeURIComponent(seg))
+      .join("/");
+
+    // $filter is not supported on /children — filter by file presence client-side.
     const listRes = await graphFetch(
-      `https://graph.microsoft.com/v1.0/me/drive/root:${encodedPath}:/children?$filter=file ne null&$select=id,name,file`,
+      `https://graph.microsoft.com/v1.0/me/drive/root:/${encodedPath}:/children?$select=id,name,file&$top=200`,
       accessToken
     );
 
     if (!listRes.ok) {
-      const errText = await listRes.text();
+      const errBody = await listRes.json().catch(() => ({}));
+      const msg = errBody?.error?.message ?? `Graph API ${listRes.status}`;
       return NextResponse.json(
-        { error: `OneDrive list failed: ${listRes.status} ${errText}` },
+        { error: `OneDrive list failed: ${msg}` },
         { status: 502 }
       );
     }
 
     const listData = await listRes.json();
-    const files: Array<{ id: string; name: string; file: { mimeType: string } }> =
-      listData.value ?? [];
+    // Only items that have a `file` facet are actual files (not folders).
+    const files: Array<{ id: string; name: string; file?: { mimeType: string } }> =
+      (listData.value ?? []).filter(
+        (item: { file?: unknown }) => item.file !== undefined
+      );
 
     const cvFiles = files.filter((f) => {
       const name = f.name.toLowerCase();
