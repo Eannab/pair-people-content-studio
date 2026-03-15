@@ -7,9 +7,10 @@ import VoicePanel from "@/components/VoicePanel";
 import PerformancePanel from "@/components/PerformancePanel";
 import IntelligencePanel from "@/components/IntelligencePanel";
 import ResearchPanel from "@/components/ResearchPanel";
+import BDPanel from "@/components/BDPanel";
 import type { ScoredArticle } from "@/app/api/newsletters/scan/route";
 
-type Panel = "create" | "voice" | "performance" | "intelligence" | "research";
+type Panel = "create" | "voice" | "performance" | "intelligence" | "research" | "bd";
 
 export default function Home() {
   const [activePanel, setActivePanel] = useState<Panel>("create");
@@ -44,6 +45,7 @@ export default function Home() {
           <IntelligencePanel onUseForPost={handleUseForPost} />
         )}
         {activePanel === "research" && <ResearchPanel />}
+        {activePanel === "bd" && <BDPanel />}
       </main>
     </div>
   );
