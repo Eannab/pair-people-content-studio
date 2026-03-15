@@ -8,6 +8,69 @@ import type { BDLead, MarketInsightSignal } from "@/app/api/bd/signals/route";
 
 const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
 
+const MAX_CONTENT_LENGTH = 40_000;
+const CHUNK_SIZE = 4_000;
+const CHUNK_OVERLAP = 150;
+
+/**
+ * Split text into ~CHUNK_SIZE chunks, breaking only at paragraph boundaries
+ * and carrying CHUNK_OVERLAP chars of the previous chunk into the next so
+ * companies mentioned across a break aren't missed.
+ */
+function chunkContent(text: string): string[] {
+  const paragraphs = text.split(/\n{2,}/);
+  const chunks: string[] = [];
+  let current = "";
+
+  for (const para of paragraphs) {
+    const candidate = current ? current + "\n\n" + para : para;
+    if (candidate.length > CHUNK_SIZE && current) {
+      chunks.push(current);
+      // carry overlap from the tail of the previous chunk
+      const tail = current.slice(-CHUNK_OVERLAP);
+      current = tail ? tail + "\n\n" + para : para;
+    } else {
+      current = candidate;
+    }
+  }
+  if (current) chunks.push(current);
+  return chunks.length ? chunks : [text.slice(0, CHUNK_SIZE)];
+}
+
+async function extractFromChunk(
+  chunk: string,
+  source: string
+): Promise<{ title: string; summary: string }[]> {
+  const res = await anthropic.messages.create({
+    model: "claude-haiku-4-5-20251001",
+    max_tokens: 1500,
+    messages: [
+      {
+        role: "user",
+        content: `Extract individual articles or stories from this content. A page may contain one article or multiple.
+
+Source: ${source}
+
+Content:
+${chunk}
+
+Return a JSON array. Each item: {"title": "headline", "summary": "2-3 sentence plain-text summary"}
+If it's a single article, return it as one item.
+Return ONLY the JSON array — no markdown fences, no preamble.`,
+      },
+    ],
+  });
+
+  const raw = res.content[0].type === "text" ? res.content[0].text.trim() : "[]";
+  const clean = raw.replace(/^```(?:json)?\n?/, "").replace(/\n?```$/, "");
+  try {
+    const parsed = JSON.parse(clean);
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    return [];
+  }
+}
+
 export async function POST(request: NextRequest) {
   try {
     const body = await request.json();
@@ -17,51 +80,37 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: "No content provided" }, { status: 400 });
     }
 
-    const truncated = content.trim().substring(0, 6000);
+    const fullContent = content.trim().substring(0, MAX_CONTENT_LENGTH);
     const source = inputTitle?.trim() || url?.trim() || "Manual submission";
     const now = new Date().toISOString();
 
-    // ── Step 1: Extract article(s) ──────────────────────────────────────────
+    // ── Step 1: Extract article(s) — chunked parallel extraction ────────────
 
-    const extractRes = await anthropic.messages.create({
-      model: "claude-haiku-4-5-20251001",
-      max_tokens: 1000,
-      messages: [
-        {
-          role: "user",
-          content: `Extract individual articles or stories from this content. A page may contain one article or multiple.
+    const chunks = chunkContent(fullContent);
+    const chunkResults = await Promise.allSettled(
+      chunks.map((chunk) => extractFromChunk(chunk, source))
+    );
 
-Source: ${source}
-
-Content:
-${truncated}
-
-Return a JSON array. Each item: {"title": "headline", "summary": "2-3 sentence plain-text summary"}
-If it's a single article, return it as one item.
-Return ONLY the JSON array — no markdown fences, no preamble.`,
-        },
-      ],
-    });
-
-    const extractRaw =
-      extractRes.content[0].type === "text" ? extractRes.content[0].text.trim() : "[]";
-    const extractClean = extractRaw.replace(/^```(?:json)?\n?/, "").replace(/\n?```$/, "");
-
-    let extracted: { title: string; summary: string }[] = [];
-    try {
-      extracted = JSON.parse(extractClean);
-    } catch {
-      extracted = [];
+    // Merge and deduplicate by title (case-insensitive)
+    const seen = new Set<string>();
+    const extracted: { title: string; summary: string }[] = [];
+    for (const result of chunkResults) {
+      if (result.status !== "fulfilled") continue;
+      for (const item of result.value) {
+        const key = item.title?.toLowerCase().trim();
+        if (key && !seen.has(key)) {
+          seen.add(key);
+          extracted.push(item);
+        }
+      }
     }
 
     // Fallback: treat the whole paste as a single article
-    if (!Array.isArray(extracted) || extracted.length === 0) {
-      extracted = [
-        {
-          title: inputTitle?.trim() || source,
-          summary: truncated.substring(0, 400),
-        },
-      ];
+    if (extracted.length === 0) {
+      extracted.push({
+        title: inputTitle?.trim() || source,
+        summary: fullContent.substring(0, 400),
+      });
     }
 
     // ── Step 2: Score for sectors ────────────────────────────────────────────
