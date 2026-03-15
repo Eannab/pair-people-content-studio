@@ -3,6 +3,7 @@ import Anthropic from "@anthropic-ai/sdk";
 import { kv } from "@vercel/kv";
 import type { BDLead } from "@/app/api/bd/signals/route";
 import type { OutreachPreferences } from "@/app/api/bd/preferences/route";
+import { getTopCVMatches } from "@/lib/cv-context";
 
 const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
 
@@ -17,6 +18,7 @@ export async function POST(
       kv.get<BDLead[]>("bd:leads"),
       kv.get<OutreachPreferences>("bd:outreach_preferences").catch(() => null),
     ]);
+
 
     if (!leads) {
       return NextResponse.json({ error: "No leads found" }, { status: 404 });
@@ -45,6 +47,18 @@ export async function POST(
       ? `\n\nEanna's outreach preferences (from previous conversations):\n${preferences.rawPreferences}`
       : "";
 
+    // CV matches
+    const cvMatches = await getTopCVMatches(lead, 2, 7);
+    const cvSection =
+      cvMatches.length > 0
+        ? `\n\nMatched candidates from Pair People's active CV pool (include a brief mention in the email — e.g. "We have [X] immediately available"):${cvMatches
+            .map(
+              (m) =>
+                `\n- ${m.candidate.name} (${m.candidate.seniority} ${m.candidate.currentRole}, ${m.candidate.yearsExperience}yr exp) — ${m.fitExplanation}`
+            )
+            .join("")}`
+        : "";
+
     const response = await anthropic.messages.create({
       model: "claude-sonnet-4-20250514",
       max_tokens: 600,
@@ -59,7 +73,7 @@ Company context:
 - Signal: ${hookContext}
 - Contact: ${lead.hiringContact.name || "the hiring manager"}, ${lead.hiringContact.title || "CTO/Head of Engineering"}
 - Why reach out now: ${lead.relevanceReason || `strong signal in ${lead.sector}`}
-${prefSection}
+${prefSection}${cvSection}
 
 Write the email body only (no subject line). Requirements:
 - 100-120 words total
@@ -90,7 +104,7 @@ Return ONLY the email body text.`,
       await kv.set("bd:leads", updatedLeads, { ex: 60 * 60 * 24 * 30 });
     } catch {}
 
-    return NextResponse.json({ draft, lead: updatedLead });
+    return NextResponse.json({ draft, lead: updatedLead, cvMatches });
   } catch (err) {
     console.error("bd/draft error:", err);
     return NextResponse.json(

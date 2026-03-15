@@ -37,7 +37,7 @@ export const authOptions: NextAuthOptions = {
       tenantId: tenantId ?? "common",
       authorization: {
         params: {
-          scope: "openid profile email User.Read Mail.Read offline_access",
+          scope: "openid profile email User.Read Mail.Read Files.Read offline_access",
         },
       },
     }),

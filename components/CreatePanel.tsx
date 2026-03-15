@@ -1,10 +1,11 @@
 "use client";
 
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useCallback } from "react";
 import { v4 as uuidv4 } from "uuid";
 import GeneratedPost from "./GeneratedPost";
 import ImagePanel from "./ImagePanel";
 import RefinementPanel from "./RefinementPanel";
+import type { LinkedInIntelligenceReport, LinkedInInsight } from "@/lib/linkedin-insights-context";
 
 type PostType =
   | "Hot Candidate"
@@ -52,6 +53,137 @@ const postTypeEmojis: Record<PostType, string> = {
 interface CreatePanelProps {
   contextSuggestion?: string;
   onContextConsumed?: () => void;
+}
+
+// ── LinkedIn Insights Widget ──────────────────────────────────────────────────
+
+function LinkedInInsightsWidget({ postType }: { postType: string | null }) {
+  const [report, setReport] = useState<LinkedInIntelligenceReport | null>(null);
+  const [expanded, setExpanded] = useState(false);
+  const [expandedInsight, setExpandedInsight] = useState<string | null>(null);
+
+  const load = useCallback(async () => {
+    try {
+      const res = await fetch("/api/research/linkedin-intelligence");
+      if (res.ok) {
+        const data = await res.json();
+        setReport(data);
+      }
+    } catch {
+      // ignore
+    }
+  }, []);
+
+  useEffect(() => {
+    load();
+  }, [load]);
+
+  if (!report || report.insights.length === 0) return null;
+
+  const relevant = postType
+    ? report.insights.filter(
+        (i: LinkedInInsight) =>
+          i.applicablePostTypes.length === 0 ||
+          i.applicablePostTypes.some(
+            (t: string) => t.toLowerCase() === postType.toLowerCase()
+          )
+      )
+    : report.insights;
+
+  const top = relevant.slice(0, 3);
+  if (top.length === 0) return null;
+
+  return (
+    <div
+      className="mb-6 rounded-xl overflow-hidden"
+      style={{ border: "1.5px solid #BDCF7C", backgroundColor: "#FFFFFF" }}
+    >
+      <button
+        onClick={() => setExpanded(!expanded)}
+        className="w-full flex items-center justify-between px-4 py-3 text-left"
+        style={{ backgroundColor: "rgba(189,207,124,0.12)" }}
+      >
+        <div className="flex items-center gap-2">
+          <span className="text-base">📈</span>
+          <span
+            className="text-xs font-semibold"
+            style={{ fontFamily: "var(--font-poppins), Poppins, sans-serif", color: "#323B6A" }}
+          >
+            What&apos;s working on LinkedIn now
+          </span>
+          <span
+            className="px-1.5 py-0.5 rounded-full text-xs font-semibold"
+            style={{ backgroundColor: "#BDCF7C", color: "#323B6A" }}
+          >
+            {top.length}
+          </span>
+          <span className="text-xs" style={{ color: "#A7B8D1" }}>
+            · {report.coversPeriod}
+          </span>
+        </div>
+        <svg
+          className={`w-4 h-4 transition-transform ${expanded ? "rotate-180" : ""}`}
+          fill="none"
+          stroke="#6F92BF"
+          viewBox="0 0 24 24"
+        >
+          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+        </svg>
+      </button>
+
+      {expanded && (
+        <div className="px-4 py-3 space-y-3">
+          {top.map((insight: LinkedInInsight) => (
+            <div key={insight.id} className="space-y-1">
+              <div className="flex items-start justify-between gap-2">
+                <div>
+                  <p
+                    className="text-xs font-semibold"
+                    style={{ fontFamily: "var(--font-poppins), Poppins, sans-serif", color: "#323B6A" }}
+                  >
+                    {insight.title}
+                  </p>
+                  <p className="text-xs mt-0.5 leading-relaxed" style={{ color: "#6F92BF" }}>
+                    {insight.observation}
+                  </p>
+                </div>
+                {insight.examplePost && (
+                  <button
+                    onClick={() =>
+                      setExpandedInsight(
+                        expandedInsight === insight.id ? null : insight.id
+                      )
+                    }
+                    className="flex-shrink-0 text-xs px-2 py-0.5 rounded"
+                    style={{ backgroundColor: "#E7EDF3", color: "#6F92BF" }}
+                  >
+                    {expandedInsight === insight.id ? "Hide" : "Example"}
+                  </button>
+                )}
+              </div>
+              {expandedInsight === insight.id && insight.examplePost && (
+                <div
+                  className="text-xs leading-relaxed italic px-3 py-2 rounded-lg"
+                  style={{
+                    backgroundColor: "#E7EDF3",
+                    color: "#323B6A",
+                    borderLeft: "3px solid #BDCF7C",
+                  }}
+                >
+                  &ldquo;{insight.examplePost}&rdquo;
+                  {insight.exampleAuthor && (
+                    <span className="block mt-1 not-italic" style={{ color: "#A7B8D1" }}>
+                      — {insight.exampleAuthor}
+                    </span>
+                  )}
+                </div>
+              )}
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
 }
 
 export default function CreatePanel({ contextSuggestion, onContextConsumed }: CreatePanelProps) {
@@ -246,6 +378,9 @@ export default function CreatePanel({ contextSuggestion, onContextConsumed }: Cr
           {context.length} chars
         </p>
       </section>
+
+      {/* LinkedIn Insights */}
+      <LinkedInInsightsWidget postType={selectedPostType} />
 
       {/* Generate Button */}
       <button
