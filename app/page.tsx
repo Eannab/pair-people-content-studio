@@ -47,7 +47,10 @@ export default function Home() {
         {activePanel === "voice" && <VoicePanel />}
         {activePanel === "performance" && <PerformancePanel />}
         {activePanel === "intelligence" && (
-          <IntelligencePanel onUseForPost={handleUseForPost} />
+          <IntelligencePanel
+            onUseForPost={handleUseForPost}
+            onNavigateToBD={() => setActivePanel("bd")}
+          />
         )}
         {activePanel === "research" && <ResearchPanel />}
         {activePanel === "bd" && <BDPanel onCreatePost={handleCreatePostFromBD} />}

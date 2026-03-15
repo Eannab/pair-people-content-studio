@@ -1,7 +1,8 @@
 "use client";
 
-import React, { useState, useEffect, useRef } from "react";
+import React, { useState, useEffect, useRef, useCallback } from "react";
 import type { BDLead, CompanySignal, MarketInsightSignal } from "@/app/api/bd/signals/route";
+import type { PipelineLead } from "@/app/api/bd/pipeline/route";
 
 // ── Sub-components ────────────────────────────────────────────────────────────
 
@@ -841,6 +842,269 @@ function LeadDetail({ lead, onBack, onLeadUpdate }: LeadDetailProps) {
   );
 }
 
+// ── Pipeline view ─────────────────────────────────────────────────────────────
+
+const STATUS_META: Record<
+  PipelineLead["status"],
+  { label: string; bg: string; color: string }
+> = {
+  new:       { label: "New",       bg: "#323B6A", color: "#FFFFFF" },
+  contacted: { label: "Contacted", bg: "#6F92BF", color: "#FFFFFF" },
+  replied:   { label: "Replied",   bg: "#E8A838", color: "#323B6A" },
+  converted: { label: "Converted", bg: "#BDCF7C", color: "#323B6A" },
+  dismissed: { label: "Dismissed", bg: "#E7EDF3", color: "#A7B8D1" },
+};
+
+function PipelineRow({ lead: initial }: { lead: PipelineLead }) {
+  const [lead, setLead] = useState(initial);
+  const [localNotes, setLocalNotes] = useState(initial.notes);
+  const [saved, setSaved] = useState(false);
+  const notesTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const patch = useCallback(
+    async (update: Partial<Pick<PipelineLead, "status" | "notes">>) => {
+      try {
+        const res = await fetch(`/api/bd/pipeline/${lead.id}`, {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(update),
+        });
+        if (res.ok) {
+          const data = await res.json();
+          setLead(data.lead);
+          setSaved(true);
+          setTimeout(() => setSaved(false), 2000);
+        }
+      } catch {}
+    },
+    [lead.id]
+  );
+
+  const handleStatusChange = (e: React.ChangeEvent<HTMLSelectElement>) => {
+    const status = e.target.value as PipelineLead["status"];
+    setLead((prev) => ({ ...prev, status }));
+    patch({ status });
+  };
+
+  const handleNotesChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const notes = e.target.value;
+    setLocalNotes(notes);
+    if (notesTimer.current) clearTimeout(notesTimer.current);
+    notesTimer.current = setTimeout(() => patch({ notes }), 800);
+  };
+
+  const handleDelete = async () => {
+    try {
+      await fetch(`/api/bd/pipeline/${lead.id}`, { method: "DELETE" });
+      // Parent will re-fetch; optimistically hide row
+      setLead((prev) => ({ ...prev, status: "dismissed" }));
+    } catch {}
+  };
+
+  const sm = STATUS_META[lead.status];
+  const dateStr = new Date(lead.dateAdded).toLocaleDateString("en-AU", {
+    day: "numeric",
+    month: "short",
+  });
+
+  return (
+    <div
+      className="rounded-xl p-4 flex flex-col gap-3 transition-all"
+      style={{
+        backgroundColor: "#FFFFFF",
+        border: "1.5px solid #E7EDF3",
+        opacity: lead.status === "dismissed" ? 0.5 : 1,
+      }}
+    >
+      {/* Top row: name, sector, signal, date */}
+      <div className="flex items-start justify-between gap-2">
+        <div className="flex flex-wrap items-center gap-2 flex-1 min-w-0">
+          <span
+            className="text-sm font-semibold truncate"
+            style={{ color: "#323B6A", fontFamily: "var(--font-poppins), Poppins, sans-serif" }}
+          >
+            {lead.companyName}
+          </span>
+          <SectorTag sector={lead.sector} />
+          {lead.signals[0] && <SignalBadge signal={lead.signals[0]} />}
+        </div>
+        <span className="text-xs flex-shrink-0" style={{ color: "#A7B8D1" }}>
+          {dateStr}
+        </span>
+      </div>
+
+      {/* Bottom row: notes, status, saved indicator, delete */}
+      <div className="flex items-center gap-2">
+        <input
+          type="text"
+          value={localNotes}
+          onChange={handleNotesChange}
+          placeholder="Add notes, e.g. spoke to CTO 14 March…"
+          className="flex-1 px-3 py-2 rounded-lg text-xs outline-none min-w-0"
+          style={{
+            border: "1.5px solid #E7EDF3",
+            color: "#323B6A",
+            backgroundColor: "#FAFBFC",
+          }}
+          onFocus={(e) => { e.currentTarget.style.borderColor = "#BDCF7C"; }}
+          onBlur={(e) => { e.currentTarget.style.borderColor = "#E7EDF3"; }}
+        />
+        {saved && (
+          <span className="text-xs flex-shrink-0" style={{ color: "#BDCF7C" }}>
+            ✓
+          </span>
+        )}
+        <select
+          value={lead.status}
+          onChange={handleStatusChange}
+          className="text-xs px-2 py-2 rounded-lg outline-none flex-shrink-0 font-semibold"
+          style={{
+            backgroundColor: sm.bg,
+            color: sm.color,
+            border: "none",
+            fontFamily: "var(--font-poppins), Poppins, sans-serif",
+            cursor: "pointer",
+          }}
+        >
+          {(Object.keys(STATUS_META) as PipelineLead["status"][]).map((s) => (
+            <option key={s} value={s}>
+              {STATUS_META[s].label}
+            </option>
+          ))}
+        </select>
+        <button
+          onClick={handleDelete}
+          className="w-7 h-7 flex items-center justify-center rounded-lg flex-shrink-0 transition-colors"
+          style={{ color: "#A7B8D1" }}
+          onMouseEnter={(e) => {
+            (e.currentTarget as HTMLButtonElement).style.backgroundColor = "#FFF0F0";
+            (e.currentTarget as HTMLButtonElement).style.color = "#CC4444";
+          }}
+          onMouseLeave={(e) => {
+            (e.currentTarget as HTMLButtonElement).style.backgroundColor = "transparent";
+            (e.currentTarget as HTMLButtonElement).style.color = "#A7B8D1";
+          }}
+          title="Remove from pipeline"
+        >
+          <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
+              d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+          </svg>
+        </button>
+      </div>
+    </div>
+  );
+}
+
+function PipelineTab() {
+  const [pipeline, setPipeline] = useState<PipelineLead[]>([]);
+  const [showDismissed, setShowDismissed] = useState(false);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    fetch("/api/bd/pipeline")
+      .then((r) => r.json())
+      .then((d) => setPipeline(d.pipeline ?? []))
+      .catch(() => {})
+      .finally(() => setLoading(false));
+  }, []);
+
+  const active = pipeline.filter((l) => l.status !== "dismissed");
+  const dismissed = pipeline.filter((l) => l.status === "dismissed");
+  const visible = showDismissed ? pipeline : active;
+
+  // Sort: converted last, then by dateAdded desc
+  const sorted = [...visible].sort((a, b) => {
+    if (a.status === "converted" && b.status !== "converted") return 1;
+    if (b.status === "converted" && a.status !== "converted") return -1;
+    return new Date(b.dateAdded).getTime() - new Date(a.dateAdded).getTime();
+  });
+
+  if (loading) {
+    return (
+      <div className="flex items-center gap-2 py-8" style={{ color: "#A7B8D1" }}>
+        <svg className="w-4 h-4 animate-spin" fill="none" viewBox="0 0 24 24">
+          <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+          <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+        </svg>
+        <span className="text-sm">Loading pipeline…</span>
+      </div>
+    );
+  }
+
+  if (pipeline.length === 0) {
+    return (
+      <div
+        className="rounded-2xl p-10 flex flex-col items-center text-center gap-4"
+        style={{ backgroundColor: "#FFFFFF", border: "1.5px dashed #E7EDF3" }}
+      >
+        <div
+          className="w-14 h-14 rounded-2xl flex items-center justify-center text-2xl"
+          style={{ backgroundColor: "#E7EDF3" }}
+        >
+          📋
+        </div>
+        <div>
+          <p
+            className="text-base font-semibold mb-1"
+            style={{ color: "#323B6A", fontFamily: "var(--font-poppins), Poppins, sans-serif" }}
+          >
+            Pipeline is empty
+          </p>
+          <p className="text-sm" style={{ color: "#A7B8D1" }}>
+            Detect signals in the Digest tab to start adding leads here automatically.
+          </p>
+        </div>
+      </div>
+    );
+  }
+
+  // Status summary counts
+  const counts = active.reduce(
+    (acc, l) => { acc[l.status] = (acc[l.status] ?? 0) + 1; return acc; },
+    {} as Record<string, number>
+  );
+
+  return (
+    <div className="flex flex-col gap-4">
+      {/* Summary bar */}
+      <div className="flex flex-wrap gap-2">
+        {(Object.keys(STATUS_META) as PipelineLead["status"][])
+          .filter((s) => s !== "dismissed" && counts[s])
+          .map((s) => (
+            <span
+              key={s}
+              className="text-xs px-2.5 py-1 rounded-full font-semibold"
+              style={{ backgroundColor: STATUS_META[s].bg, color: STATUS_META[s].color }}
+            >
+              {STATUS_META[s].label} {counts[s]}
+            </span>
+          ))}
+      </div>
+
+      {/* Lead rows */}
+      <div className="flex flex-col gap-2">
+        {sorted.map((lead) => (
+          <PipelineRow key={lead.id} lead={lead} />
+        ))}
+      </div>
+
+      {/* Dismissed toggle */}
+      {dismissed.length > 0 && (
+        <button
+          onClick={() => setShowDismissed((v) => !v)}
+          className="text-xs py-2 transition-all"
+          style={{ color: "#A7B8D1" }}
+        >
+          {showDismissed
+            ? `Hide dismissed (${dismissed.length})`
+            : `Show dismissed (${dismissed.length})`}
+        </button>
+      )}
+    </div>
+  );
+}
+
 // ── Main BDPanel ──────────────────────────────────────────────────────────────
 
 interface BDPanelProps {
@@ -848,6 +1112,7 @@ interface BDPanelProps {
 }
 
 export default function BDPanel({ onCreatePost }: BDPanelProps) {
+  const [activeTab, setActiveTab] = useState<"digest" | "pipeline">("digest");
   const [leads, setLeads] = useState<BDLead[]>([]);
   const [marketInsights, setMarketInsights] = useState<MarketInsightSignal[]>([]);
   const [researchingIds, setResearchingIds] = useState<Set<string>>(new Set());
@@ -923,10 +1188,6 @@ export default function BDPanel({ onCreatePost }: BDPanelProps) {
     setLeads((prev) => prev.map((l) => (l.id === updated.id ? updated : l)));
   };
 
-  const handleCreatePost = (context: string) => {
-    onCreatePost?.(context);
-  };
-
   if (selectedLead) {
     return (
       <LeadDetail
@@ -943,7 +1204,7 @@ export default function BDPanel({ onCreatePost }: BDPanelProps) {
   return (
     <div className="max-w-3xl mx-auto px-6 py-8">
       {/* Header */}
-      <div className="mb-8">
+      <div className="mb-6">
         <h1
           className="text-2xl mb-1"
           style={{
@@ -955,174 +1216,198 @@ export default function BDPanel({ onCreatePost }: BDPanelProps) {
           BD Intelligence
         </h1>
         <p className="text-sm" style={{ color: "#6F92BF" }}>
-          Detects funding, hiring, and launch signals from your newsletter scan. Australian startups and scale-ups become BD leads. Large or global companies surface as Market Insight content ideas.
+          Detects funding, hiring, and launch signals. Australian startups become BD leads. Large or global companies surface as Market Insight content ideas.
         </p>
       </div>
 
-      {/* Action bar */}
-      <div className="flex items-center justify-between mb-6">
-        <div>
-          {lastDetected && (
-            <p className="text-xs" style={{ color: "#A7B8D1" }}>
-              Last detected{" "}
-              {new Date(lastDetected).toLocaleString("en-AU", {
-                dateStyle: "short",
-                timeStyle: "short",
-              })}
-            </p>
-          )}
-          {!isEmpty && !lastDetected && (
-            <p className="text-xs" style={{ color: "#A7B8D1" }}>
-              {leads.length} lead{leads.length !== 1 ? "s" : ""} · {marketInsights.length} market insight
-              {marketInsights.length !== 1 ? "s" : ""}
-            </p>
-          )}
-        </div>
-        <div className="flex gap-2">
-          {!isEmpty && (
-            <button
-              onClick={() => {
-                setLeads([]);
-                setMarketInsights([]);
-                fetch("/api/bd/leads", { method: "DELETE" }).catch(() => {});
-              }}
-              className="text-xs px-3 py-2 rounded-xl transition-all"
-              style={{ color: "#A7B8D1", backgroundColor: "#E7EDF3" }}
-            >
-              Clear
-            </button>
-          )}
+      {/* Tab bar */}
+      <div className="flex border-b mb-6" style={{ borderColor: "#E7EDF3" }}>
+        {(["digest", "pipeline"] as const).map((t) => (
           <button
-            onClick={detectSignals}
-            disabled={isDetecting}
-            className="flex items-center gap-2 px-4 py-2.5 rounded-xl text-sm font-semibold transition-all"
+            key={t}
+            onClick={() => setActiveTab(t)}
+            className="px-1 py-2.5 mr-6 text-sm font-medium transition-all duration-150"
             style={{
-              backgroundColor: isDetecting ? "#E7EDF3" : "#323B6A",
-              color: isDetecting ? "#A7B8D1" : "#FFFFFF",
               fontFamily: "var(--font-poppins), Poppins, sans-serif",
-              cursor: isDetecting ? "not-allowed" : "pointer",
-              boxShadow: isDetecting ? "none" : "0 4px 12px rgba(50, 59, 106, 0.3)",
+              fontWeight: 600,
+              color: activeTab === t ? "#323B6A" : "#A7B8D1",
+              borderBottom: activeTab === t ? "2px solid #BDCF7C" : "2px solid transparent",
+              backgroundColor: "transparent",
             }}
           >
-            {isDetecting ? (
-              <>
-                <svg className="w-4 h-4 animate-spin" fill="none" viewBox="0 0 24 24">
-                  <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
-                  <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
-                </svg>
-                Detecting...
-              </>
-            ) : (
-              <>
-                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 10V3L4 14h7v7l9-11h-7z" />
-                </svg>
-                {!isEmpty ? "Re-scan" : "Detect Signals"}
-              </>
-            )}
+            {t === "digest" ? "Digest" : "Pipeline"}
           </button>
-        </div>
+        ))}
       </div>
 
-      {/* Error */}
-      {detectError && (
-        <div
-          className="mb-6 px-4 py-3 rounded-xl text-sm"
-          style={{ backgroundColor: "#FFF0F0", border: "1px solid #FFCCCC", color: "#CC4444" }}
-        >
-          <strong>Error:</strong> {detectError}
-        </div>
-      )}
+      {/* Pipeline tab */}
+      {activeTab === "pipeline" && <PipelineTab />}
 
-      {/* Empty state */}
-      {isEmpty && !isDetecting && (
-        <div
-          className="rounded-2xl p-10 flex flex-col items-center text-center gap-4"
-          style={{ backgroundColor: "#FFFFFF", border: "1.5px dashed #E7EDF3" }}
-        >
-          <div
-            className="w-14 h-14 rounded-2xl flex items-center justify-center text-2xl"
-            style={{ backgroundColor: "#E7EDF3" }}
-          >
-            ⚡
+      {/* Digest tab */}
+      {activeTab === "digest" && (
+        <>
+          {/* Action bar */}
+          <div className="flex items-center justify-between mb-6">
+            <div>
+              {lastDetected && (
+                <p className="text-xs" style={{ color: "#A7B8D1" }}>
+                  Last detected{" "}
+                  {new Date(lastDetected).toLocaleString("en-AU", {
+                    dateStyle: "short",
+                    timeStyle: "short",
+                  })}
+                </p>
+              )}
+              {!isEmpty && !lastDetected && (
+                <p className="text-xs" style={{ color: "#A7B8D1" }}>
+                  {leads.length} lead{leads.length !== 1 ? "s" : ""} · {marketInsights.length} market insight
+                  {marketInsights.length !== 1 ? "s" : ""}
+                </p>
+              )}
+            </div>
+            <div className="flex gap-2">
+              {!isEmpty && (
+                <button
+                  onClick={() => {
+                    setLeads([]);
+                    setMarketInsights([]);
+                    fetch("/api/bd/leads", { method: "DELETE" }).catch(() => {});
+                  }}
+                  className="text-xs px-3 py-2 rounded-xl transition-all"
+                  style={{ color: "#A7B8D1", backgroundColor: "#E7EDF3" }}
+                >
+                  Clear
+                </button>
+              )}
+              <button
+                onClick={detectSignals}
+                disabled={isDetecting}
+                className="flex items-center gap-2 px-4 py-2.5 rounded-xl text-sm font-semibold transition-all"
+                style={{
+                  backgroundColor: isDetecting ? "#E7EDF3" : "#323B6A",
+                  color: isDetecting ? "#A7B8D1" : "#FFFFFF",
+                  fontFamily: "var(--font-poppins), Poppins, sans-serif",
+                  cursor: isDetecting ? "not-allowed" : "pointer",
+                  boxShadow: isDetecting ? "none" : "0 4px 12px rgba(50, 59, 106, 0.3)",
+                }}
+              >
+                {isDetecting ? (
+                  <>
+                    <svg className="w-4 h-4 animate-spin" fill="none" viewBox="0 0 24 24">
+                      <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                      <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+                    </svg>
+                    Detecting...
+                  </>
+                ) : (
+                  <>
+                    <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 10V3L4 14h7v7l9-11h-7z" />
+                    </svg>
+                    {!isEmpty ? "Re-scan" : "Detect Signals"}
+                  </>
+                )}
+              </button>
+            </div>
           </div>
-          <div>
-            <p
-              className="text-base font-semibold mb-1"
-              style={{ color: "#323B6A", fontFamily: "var(--font-poppins), Poppins, sans-serif" }}
-            >
-              No signals detected yet
-            </p>
-            <p className="text-sm" style={{ color: "#A7B8D1" }}>
-              Run a newsletter scan in the Market Intel tab first, then click Detect Signals.
-            </p>
-          </div>
-        </div>
-      )}
 
-      {/* BD Leads section */}
-      {sortedLeads.length > 0 && (
-        <div className="mb-8">
-          <div className="flex items-center gap-2 mb-4">
-            <h2
-              className="text-sm font-semibold uppercase tracking-wider"
-              style={{ color: "#323B6A", fontFamily: "var(--font-poppins), Poppins, sans-serif" }}
+          {detectError && (
+            <div
+              className="mb-6 px-4 py-3 rounded-xl text-sm"
+              style={{ backgroundColor: "#FFF0F0", border: "1px solid #FFCCCC", color: "#CC4444" }}
             >
-              BD Leads
-            </h2>
-            <span
-              className="text-xs px-2 py-0.5 rounded-full font-semibold"
-              style={{ backgroundColor: "#BDCF7C", color: "#323B6A" }}
-            >
-              {sortedLeads.length}
-            </span>
-            <span className="text-xs" style={{ color: "#A7B8D1" }}>
-              · AU-based or hiring in AU · under 200 people
-            </span>
-          </div>
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-            {sortedLeads.map((lead) => (
-              <LeadCard
-                key={lead.id}
-                lead={lead}
-                isResearching={researchingIds.has(lead.id)}
-                onView={() => setSelectedLead(lead)}
-              />
-            ))}
-          </div>
-        </div>
-      )}
+              <strong>Error:</strong> {detectError}
+            </div>
+          )}
 
-      {/* Market Insights section */}
-      {marketInsights.length > 0 && (
-        <div>
-          <div className="flex items-center gap-2 mb-4">
-            <h2
-              className="text-sm font-semibold uppercase tracking-wider"
-              style={{ color: "#323B6A", fontFamily: "var(--font-poppins), Poppins, sans-serif" }}
+          {isEmpty && !isDetecting && (
+            <div
+              className="rounded-2xl p-10 flex flex-col items-center text-center gap-4"
+              style={{ backgroundColor: "#FFFFFF", border: "1.5px dashed #E7EDF3" }}
             >
-              Market Insights
-            </h2>
-            <span
-              className="text-xs px-2 py-0.5 rounded-full font-semibold"
-              style={{ backgroundColor: "#E7EDF3", color: "#6F92BF" }}
-            >
-              {marketInsights.length}
-            </span>
-            <span className="text-xs" style={{ color: "#A7B8D1" }}>
-              · interesting news · not BD leads · great for content
-            </span>
-          </div>
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-            {marketInsights.map((insight) => (
-              <MarketInsightCard
-                key={insight.id}
-                insight={insight}
-                onCreatePost={handleCreatePost}
-              />
-            ))}
-          </div>
-        </div>
+              <div
+                className="w-14 h-14 rounded-2xl flex items-center justify-center text-2xl"
+                style={{ backgroundColor: "#E7EDF3" }}
+              >
+                ⚡
+              </div>
+              <div>
+                <p
+                  className="text-base font-semibold mb-1"
+                  style={{ color: "#323B6A", fontFamily: "var(--font-poppins), Poppins, sans-serif" }}
+                >
+                  No signals detected yet
+                </p>
+                <p className="text-sm" style={{ color: "#A7B8D1" }}>
+                  Run a newsletter scan in the Market Intel tab first, then click Detect Signals.
+                </p>
+              </div>
+            </div>
+          )}
+
+          {sortedLeads.length > 0 && (
+            <div className="mb-8">
+              <div className="flex items-center gap-2 mb-4">
+                <h2
+                  className="text-sm font-semibold uppercase tracking-wider"
+                  style={{ color: "#323B6A", fontFamily: "var(--font-poppins), Poppins, sans-serif" }}
+                >
+                  BD Leads
+                </h2>
+                <span
+                  className="text-xs px-2 py-0.5 rounded-full font-semibold"
+                  style={{ backgroundColor: "#BDCF7C", color: "#323B6A" }}
+                >
+                  {sortedLeads.length}
+                </span>
+                <span className="text-xs" style={{ color: "#A7B8D1" }}>
+                  · AU-based or hiring in AU · under 200 people
+                </span>
+              </div>
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                {sortedLeads.map((lead) => (
+                  <LeadCard
+                    key={lead.id}
+                    lead={lead}
+                    isResearching={researchingIds.has(lead.id)}
+                    onView={() => setSelectedLead(lead)}
+                  />
+                ))}
+              </div>
+            </div>
+          )}
+
+          {marketInsights.length > 0 && (
+            <div>
+              <div className="flex items-center gap-2 mb-4">
+                <h2
+                  className="text-sm font-semibold uppercase tracking-wider"
+                  style={{ color: "#323B6A", fontFamily: "var(--font-poppins), Poppins, sans-serif" }}
+                >
+                  Market Insights
+                </h2>
+                <span
+                  className="text-xs px-2 py-0.5 rounded-full font-semibold"
+                  style={{ backgroundColor: "#E7EDF3", color: "#6F92BF" }}
+                >
+                  {marketInsights.length}
+                </span>
+                <span className="text-xs" style={{ color: "#A7B8D1" }}>
+                  · interesting news · not BD leads · great for content
+                </span>
+              </div>
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                {marketInsights.map((insight) => (
+                  <MarketInsightCard
+                    key={insight.id}
+                    insight={insight}
+                    onCreatePost={(ctx) => onCreatePost?.(ctx)}
+                  />
+                ))}
+              </div>
+            </div>
+          )}
+        </>
       )}
     </div>
   );

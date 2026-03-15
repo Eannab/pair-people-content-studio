@@ -227,6 +227,33 @@ Rules:
       await kv.set("bd:market_insights", marketInsights, { ex: 60 * 60 * 24 * 30 });
     } catch {}
 
+    // Auto-add new BD leads to the pipeline (preserve existing entries)
+    try {
+      const existingPipeline =
+        (await kv.get<Array<{ id: string; companyName: string }>>("bd:pipeline")) ?? [];
+      const pipelineNames = new Set(
+        existingPipeline.map((p) => p.companyName.toLowerCase())
+      );
+      const toAddToPipeline = bdLeads.filter(
+        (l) => !pipelineNames.has(l.companyName.toLowerCase())
+      );
+      if (toAddToPipeline.length > 0) {
+        const newEntries = toAddToPipeline.map((l) => ({
+          id: uuidv4(),
+          companyId: l.id,
+          companyName: l.companyName,
+          sector: l.sector,
+          signals: l.signals,
+          relevanceScore: l.relevanceScore,
+          dateAdded: now,
+          status: "new" as const,
+          notes: "",
+          updatedAt: now,
+        }));
+        await kv.set("bd:pipeline", [...existingPipeline, ...newEntries]);
+      }
+    } catch {}
+
     return NextResponse.json({
       leads: bdLeads,
       marketInsights,

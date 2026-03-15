@@ -7,10 +7,11 @@ import type { NewsletterSender } from "@/app/api/newsletters/senders/route";
 
 interface Props {
   onUseForPost: (article: ScoredArticle) => void;
+  onNavigateToBD?: () => void;
 }
 
 type ScanState = "idle" | "scanning" | "done" | "error";
-type Tab = "insight" | "sources";
+type Tab = "insight" | "sources" | "manual";
 
 // ── Sector metadata ──────────────────────────────────────────────────────────
 
@@ -612,14 +613,243 @@ function MarketInsightTab({
   );
 }
 
+// ── Add Articles tab ─────────────────────────────────────────────────────────
+
+interface ManualResult {
+  articlesAdded: number;
+  leadsAdded: number;
+  insightsAdded: number;
+  articles: ScoredArticle[];
+}
+
+function AddArticlesTab({
+  onUseForPost,
+  onNavigateToBD,
+}: {
+  onUseForPost: (article: ScoredArticle) => void;
+  onNavigateToBD?: () => void;
+}) {
+  const [url, setUrl] = useState("");
+  const [content, setContent] = useState("");
+  const [isDragOver, setIsDragOver] = useState(false);
+  const [isProcessing, setIsProcessing] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [result, setResult] = useState<ManualResult | null>(null);
+
+  const handleDrop = (e: React.DragEvent) => {
+    e.preventDefault();
+    setIsDragOver(false);
+    // Accept dragged text files
+    const file = e.dataTransfer.files[0];
+    if (file && file.type.startsWith("text/")) {
+      const reader = new FileReader();
+      reader.onload = (ev) => setContent((ev.target?.result as string) ?? "");
+      reader.readAsText(file);
+    } else {
+      // Accept dragged plain text
+      const text = e.dataTransfer.getData("text/plain");
+      if (text) setContent((prev) => (prev ? prev + "\n\n" + text : text));
+    }
+  };
+
+  const handleSubmit = async () => {
+    if (!content.trim()) return;
+    setIsProcessing(true);
+    setError(null);
+    setResult(null);
+    try {
+      const res = await fetch("/api/newsletters/manual", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ content: content.trim(), url: url.trim() }),
+      });
+      if (!res.ok) {
+        const d = await res.json().catch(() => ({}));
+        throw new Error(d.error || "Processing failed");
+      }
+      const data = await res.json();
+      setResult(data);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Something went wrong");
+    } finally {
+      setIsProcessing(false);
+    }
+  };
+
+  return (
+    <div className="space-y-5">
+      <p className="text-sm" style={{ color: "#6F92BF" }}>
+        Paste any article, blog post, or press release. Claude will extract the content, score it for relevance, detect any BD signals, and add everything to your Market Intel and BD digest.
+      </p>
+
+      {/* Source URL */}
+      <div>
+        <label
+          className="block text-xs font-semibold uppercase tracking-wider mb-1.5"
+          style={{ color: "#323B6A", fontFamily: "var(--font-poppins), Poppins, sans-serif" }}
+        >
+          Source URL <span style={{ color: "#A7B8D1", fontWeight: 400, textTransform: "none" }}>(optional)</span>
+        </label>
+        <input
+          type="url"
+          value={url}
+          onChange={(e) => setUrl(e.target.value)}
+          placeholder="https://techcrunch.com/..."
+          className="w-full px-3 py-2.5 rounded-xl text-sm outline-none"
+          style={{ border: "1.5px solid #E7EDF3", color: "#323B6A", backgroundColor: "#FFFFFF" }}
+          onFocus={(e) => { e.currentTarget.style.borderColor = "#BDCF7C"; }}
+          onBlur={(e) => { e.currentTarget.style.borderColor = "#E7EDF3"; }}
+        />
+      </div>
+
+      {/* Content drop zone */}
+      <div>
+        <label
+          className="block text-xs font-semibold uppercase tracking-wider mb-1.5"
+          style={{ color: "#323B6A", fontFamily: "var(--font-poppins), Poppins, sans-serif" }}
+        >
+          Article Content
+        </label>
+        <div
+          onDragOver={(e) => { e.preventDefault(); setIsDragOver(true); }}
+          onDragLeave={() => setIsDragOver(false)}
+          onDrop={handleDrop}
+          className="relative rounded-xl transition-all"
+          style={{
+            border: isDragOver ? "2px dashed #BDCF7C" : "1.5px solid #E7EDF3",
+            backgroundColor: isDragOver ? "#F0F5EC" : "#FFFFFF",
+          }}
+        >
+          <textarea
+            value={content}
+            onChange={(e) => setContent(e.target.value)}
+            placeholder="Paste article text here, or drag and drop a text file…"
+            rows={9}
+            className="w-full px-4 py-3 rounded-xl text-sm outline-none resize-none bg-transparent"
+            style={{ color: "#323B6A" }}
+          />
+          {isDragOver && (
+            <div
+              className="absolute inset-0 flex items-center justify-center rounded-xl pointer-events-none"
+              style={{ backgroundColor: "rgba(240,245,236,0.8)" }}
+            >
+              <p className="text-sm font-semibold" style={{ color: "#323B6A" }}>
+                Drop to paste content
+              </p>
+            </div>
+          )}
+        </div>
+        <p className="text-xs mt-1.5 text-right" style={{ color: "#A7B8D1" }}>
+          {content.length} chars
+        </p>
+      </div>
+
+      {/* Submit */}
+      <button
+        onClick={handleSubmit}
+        disabled={!content.trim() || isProcessing}
+        className="w-full py-3.5 rounded-xl text-sm font-bold transition-all"
+        style={{
+          backgroundColor: !content.trim() || isProcessing ? "#E7EDF3" : "#323B6A",
+          color: !content.trim() || isProcessing ? "#A7B8D1" : "#FFFFFF",
+          fontFamily: "var(--font-poppins), Poppins, sans-serif",
+          fontWeight: 700,
+          cursor: !content.trim() || isProcessing ? "not-allowed" : "pointer",
+          boxShadow: !content.trim() || isProcessing ? "none" : "0 4px 12px rgba(50,59,106,0.3)",
+        }}
+      >
+        {isProcessing ? (
+          <span className="flex items-center justify-center gap-2">
+            <svg className="w-4 h-4 animate-spin" fill="none" viewBox="0 0 24 24">
+              <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+              <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+            </svg>
+            Analysing…
+          </span>
+        ) : (
+          "Extract & Analyse"
+        )}
+      </button>
+
+      {/* Error */}
+      {error && (
+        <div
+          className="px-4 py-3 rounded-xl text-sm"
+          style={{ backgroundColor: "#FFF0F0", border: "1px solid #FFCCCC", color: "#CC4444" }}
+        >
+          {error}
+        </div>
+      )}
+
+      {/* Results */}
+      {result && (
+        <div className="space-y-4">
+          {/* Summary card */}
+          <div
+            className="rounded-xl px-4 py-3 flex flex-wrap items-center gap-3"
+            style={{ backgroundColor: "#F0F5EC", border: "1px solid #BDCF7C" }}
+          >
+            <span className="text-sm font-semibold" style={{ color: "#323B6A", fontFamily: "var(--font-poppins), Poppins, sans-serif" }}>
+              Done
+            </span>
+            <span className="text-sm" style={{ color: "#323B6A" }}>
+              {result.articlesAdded} article{result.articlesAdded !== 1 ? "s" : ""} added
+              {result.leadsAdded > 0 && ` · ${result.leadsAdded} BD lead${result.leadsAdded !== 1 ? "s" : ""}`}
+              {result.insightsAdded > 0 && ` · ${result.insightsAdded} market insight${result.insightsAdded !== 1 ? "s" : ""}`}
+            </span>
+            {(result.leadsAdded > 0 || result.insightsAdded > 0) && onNavigateToBD && (
+              <button
+                onClick={onNavigateToBD}
+                className="ml-auto text-xs px-3 py-1.5 rounded-lg font-semibold transition-all"
+                style={{
+                  backgroundColor: "#323B6A",
+                  color: "#FFFFFF",
+                  fontFamily: "var(--font-poppins), Poppins, sans-serif",
+                }}
+              >
+                View in BD Intel →
+              </button>
+            )}
+          </div>
+
+          {/* New articles */}
+          {result.articles.length > 0 && (
+            <div className="space-y-3">
+              {result.articles.map((article) => (
+                <ArticleCard
+                  key={article.id}
+                  article={article}
+                  onUse={() => onUseForPost(article)}
+                />
+              ))}
+            </div>
+          )}
+
+          {result.articlesAdded === 0 && result.leadsAdded === 0 && result.insightsAdded === 0 && (
+            <p className="text-sm text-center" style={{ color: "#A7B8D1" }}>
+              No new content found — this article may already be in your pool.
+            </p>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ── Main panel ───────────────────────────────────────────────────────────────
 
-export default function IntelligencePanel({ onUseForPost }: Props) {
+export default function IntelligencePanel({ onUseForPost, onNavigateToBD }: Props) {
   const { data: session, status } = useSession();
   const [tab, setTab] = useState<Tab>("insight");
 
   const isLoading = status === "loading";
   const isConnected = status === "authenticated";
+
+  const TAB_LABELS: Record<Tab, string> = {
+    insight: "Market Insight",
+    sources: "Newsletter Sources",
+    manual: "Add Articles",
+  };
 
   return (
     <div className="max-w-3xl mx-auto px-6 py-8">
@@ -646,16 +876,11 @@ export default function IntelligencePanel({ onUseForPost }: Props) {
         </div>
       )}
 
-      {!isLoading && !isConnected && <ConnectOutlookScreen />}
-
-      {!isLoading && isConnected && session && (
+      {!isLoading && (
         <>
-          {/* Tabs */}
-          <div
-            className="flex border-b mb-6"
-            style={{ borderColor: "#E7EDF3" }}
-          >
-            {(["insight", "sources"] as Tab[]).map((t) => (
+          {/* Tabs — always visible */}
+          <div className="flex border-b mb-6" style={{ borderColor: "#E7EDF3" }}>
+            {(["insight", "sources", "manual"] as Tab[]).map((t) => (
               <button
                 key={t}
                 onClick={() => setTab(t)}
@@ -668,15 +893,26 @@ export default function IntelligencePanel({ onUseForPost }: Props) {
                   backgroundColor: "transparent",
                 }}
               >
-                {t === "insight" ? "Market Insight" : "Newsletter Sources"}
+                {TAB_LABELS[t]}
               </button>
             ))}
           </div>
 
-          {tab === "insight" && (
+          {/* Market Insight + Newsletter Sources require Outlook auth */}
+          {(tab === "insight" || tab === "sources") && !isConnected && (
+            <ConnectOutlookScreen />
+          )}
+          {tab === "insight" && isConnected && session && (
             <MarketInsightTab session={session} onUseForPost={onUseForPost} />
           )}
-          {tab === "sources" && <NewsletterSourcesTab />}
+          {tab === "sources" && isConnected && (
+            <NewsletterSourcesTab />
+          )}
+
+          {/* Add Articles is always accessible */}
+          {tab === "manual" && (
+            <AddArticlesTab onUseForPost={onUseForPost} onNavigateToBD={onNavigateToBD} />
+          )}
         </>
       )}
     </div>
