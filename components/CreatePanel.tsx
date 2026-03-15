@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState } from "react";
+import React, { useState, useEffect } from "react";
 import { v4 as uuidv4 } from "uuid";
 import GeneratedPost from "./GeneratedPost";
 import ImagePanel from "./ImagePanel";
@@ -49,10 +49,26 @@ const postTypeEmojis: Record<PostType, string> = {
   "Live Job": "🎯",
 };
 
-export default function CreatePanel() {
+interface CreatePanelProps {
+  contextSuggestion?: string;
+  onContextConsumed?: () => void;
+}
+
+export default function CreatePanel({ contextSuggestion, onContextConsumed }: CreatePanelProps) {
   const [selectedPostType, setSelectedPostType] = useState<PostType | null>(null);
   const [selectedAngle, setSelectedAngle] = useState<Angle | null>(null);
   const [context, setContext] = useState("");
+
+  // Pre-fill context when an article is passed in from Intelligence panel
+  useEffect(() => {
+    if (contextSuggestion) {
+      setContext(contextSuggestion);
+      // Auto-select Market Insight post type if nothing is selected
+      if (!selectedPostType) setSelectedPostType("Market Insight");
+      onContextConsumed?.();
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [contextSuggestion]);
   const [generatedPost, setGeneratedPost] = useState("");
   const [postId, setPostId] = useState<string>("");
   const [isLoading, setIsLoading] = useState(false);

@@ -1,103 +1,684 @@
 "use client";
 
-import React from "react";
+import React, { useState, useEffect } from "react";
+import { useSession, signIn, signOut } from "next-auth/react";
+import type { ScoredArticle } from "@/app/api/newsletters/scan/route";
+import type { NewsletterSender } from "@/app/api/newsletters/senders/route";
 
-export default function IntelligencePanel() {
+interface Props {
+  onUseForPost: (article: ScoredArticle) => void;
+}
+
+type ScanState = "idle" | "scanning" | "done" | "error";
+type Tab = "insight" | "sources";
+
+// ── Sector metadata ──────────────────────────────────────────────────────────
+
+const SECTOR_LABELS: Record<string, { label: string; bg: string; color: string }> = {
+  defence:   { label: "Defence & Deep Tech", bg: "#323B6A", color: "#FFFFFF" },
+  ai:        { label: "AI / ML",             bg: "#BDCF7C", color: "#323B6A" },
+  healthtech:{ label: "Healthtech",          bg: "#DBEAA0", color: "#323B6A" },
+  sydney:    { label: "Sydney Market",       bg: "#A7B8D1", color: "#323B6A" },
+  general:   { label: "General",             bg: "#E7EDF3", color: "#6F92BF" },
+};
+
+function SectorBadge({ sector }: { sector: string }) {
+  const s = SECTOR_LABELS[sector] ?? SECTOR_LABELS.general;
   return (
-    <div className="max-w-2xl mx-auto mt-16 text-center px-6">
-      {/* Icon */}
-      <div
-        className="inline-flex items-center justify-center w-20 h-20 rounded-2xl mb-6"
-        style={{ backgroundColor: "#FEEA99" }}
-      >
-        <svg
-          className="w-10 h-10"
-          fill="none"
-          stroke="#323B6A"
-          viewBox="0 0 24 24"
+    <span
+      className="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-semibold"
+      style={{ backgroundColor: s.bg, color: s.color, fontFamily: "var(--font-poppins), Poppins, sans-serif" }}
+    >
+      {s.label}
+    </span>
+  );
+}
+
+function ScoreBar({ score }: { score: number }) {
+  return (
+    <div className="flex items-center gap-1.5">
+      <div className="h-1.5 rounded-full flex-1" style={{ backgroundColor: "#E7EDF3" }}>
+        <div
+          className="h-full rounded-full"
+          style={{ width: `${score * 10}%`, backgroundColor: score >= 7 ? "#BDCF7C" : score >= 5 ? "#FEEA99" : "#A7B8D1" }}
+        />
+      </div>
+      <span className="text-xs font-semibold" style={{ color: "#323B6A", fontFamily: "var(--font-poppins), Poppins, sans-serif", minWidth: 24 }}>
+        {score}/10
+      </span>
+    </div>
+  );
+}
+
+function formatDate(iso: string) {
+  try {
+    return new Date(iso).toLocaleDateString("en-AU", { day: "numeric", month: "short" });
+  } catch {
+    return "";
+  }
+}
+
+// ── Article card ─────────────────────────────────────────────────────────────
+
+function ArticleCard({
+  article,
+  onUse,
+}: {
+  article: ScoredArticle;
+  onUse: () => void;
+}) {
+  return (
+    <div
+      className="rounded-xl overflow-hidden transition-all duration-150"
+      style={{ backgroundColor: "#FFFFFF", border: "1.5px solid #E7EDF3" }}
+    >
+      <div className="px-5 py-4">
+        {/* Source + date */}
+        <div className="flex items-center justify-between mb-2">
+          <span className="text-xs font-semibold" style={{ color: "#6F92BF", fontFamily: "var(--font-poppins), Poppins, sans-serif" }}>
+            {article.source}
+          </span>
+          <span className="text-xs" style={{ color: "#A7B8D1" }}>
+            {formatDate(article.receivedDate)}
+          </span>
+        </div>
+
+        {/* Title */}
+        <h3
+          className="text-sm font-semibold mb-1.5 leading-snug"
+          style={{ color: "#323B6A", fontFamily: "var(--font-poppins), Poppins, sans-serif" }}
         >
-          <path
-            strokeLinecap="round"
-            strokeLinejoin="round"
-            strokeWidth={1.5}
-            d="M9.663 17h4.673M12 3v1m6.364 1.636l-.707.707M21 12h-1M4 12H3m3.343-5.657l-.707-.707m2.828 9.9a5 5 0 117.072 0l-.548.547A3.374 3.374 0 0014 18.469V19a2 2 0 11-4 0v-.531c0-.895-.356-1.754-.988-2.386l-.548-.547z"
-          />
+          {article.title}
+        </h3>
+
+        {/* Summary */}
+        <p className="text-xs leading-relaxed mb-3" style={{ color: "#6F92BF" }}>
+          {article.summary}
+        </p>
+
+        {/* Score + sector */}
+        <div className="flex items-center gap-2 mb-3">
+          <SectorBadge sector={article.topSector} />
+          <div className="flex-1">
+            <ScoreBar score={article.topScore} />
+          </div>
+        </div>
+
+        {/* Relevance note */}
+        {article.relevanceSummary && (
+          <p className="text-xs mb-3 italic" style={{ color: "#A7B8D1" }}>
+            {article.relevanceSummary}
+          </p>
+        )}
+
+        {/* CTA row */}
+        <div className="flex items-center justify-between">
+          {article.webLink ? (
+            <a
+              href={article.webLink}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="text-xs flex items-center gap-1"
+              style={{ color: "#6F92BF" }}
+            >
+              Open email
+              <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
+                  d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14" />
+              </svg>
+            </a>
+          ) : (
+            <span />
+          )}
+          <button
+            onClick={onUse}
+            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold transition-all duration-150"
+            style={{
+              backgroundColor: "#BDCF7C",
+              color: "#323B6A",
+              fontFamily: "var(--font-poppins), Poppins, sans-serif",
+              boxShadow: "0 2px 8px rgba(189,207,124,0.35)",
+            }}
+            onMouseEnter={(e) => { (e.currentTarget as HTMLButtonElement).style.backgroundColor = "#a8ba6a"; }}
+            onMouseLeave={(e) => { (e.currentTarget as HTMLButtonElement).style.backgroundColor = "#BDCF7C"; }}
+          >
+            Use for post
+            <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M13 7l5 5m0 0l-5 5m5-5H6" />
+            </svg>
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ── Sender row ───────────────────────────────────────────────────────────────
+
+function SenderRow({
+  sender,
+  onDelete,
+}: {
+  sender: NewsletterSender;
+  onDelete: (id: string) => void;
+}) {
+  return (
+    <div
+      className="flex items-center justify-between px-4 py-3 rounded-xl"
+      style={{ backgroundColor: "#FFFFFF", border: "1.5px solid #E7EDF3" }}
+    >
+      <div>
+        <p className="text-sm font-medium" style={{ color: "#323B6A", fontFamily: "var(--font-poppins), Poppins, sans-serif" }}>
+          {sender.name}
+        </p>
+        {sender.email && (
+          <p className="text-xs mt-0.5" style={{ color: "#A7B8D1" }}>{sender.email}</p>
+        )}
+      </div>
+      <div className="flex items-center gap-2">
+        {sender.isDefault && (
+          <span className="text-xs px-2 py-0.5 rounded-full" style={{ backgroundColor: "#E7EDF3", color: "#6F92BF", fontFamily: "var(--font-poppins), Poppins, sans-serif" }}>
+            Default
+          </span>
+        )}
+        <button
+          onClick={() => onDelete(sender.id)}
+          className="w-7 h-7 flex items-center justify-center rounded-lg transition-colors"
+          style={{ color: "#A7B8D1" }}
+          onMouseEnter={(e) => { (e.currentTarget as HTMLButtonElement).style.backgroundColor = "#FFF0F0"; (e.currentTarget as HTMLButtonElement).style.color = "#CC4444"; }}
+          onMouseLeave={(e) => { (e.currentTarget as HTMLButtonElement).style.backgroundColor = "transparent"; (e.currentTarget as HTMLButtonElement).style.color = "#A7B8D1"; }}
+          title="Remove sender"
+        >
+          <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+          </svg>
+        </button>
+      </div>
+    </div>
+  );
+}
+
+// ── Newsletter Sources tab ───────────────────────────────────────────────────
+
+function NewsletterSourcesTab() {
+  const [senders, setSenders] = useState<NewsletterSender[]>([]);
+  const [newName, setNewName] = useState("");
+  const [newEmail, setNewEmail] = useState("");
+  const [isAdding, setIsAdding] = useState(false);
+  const [error, setError] = useState("");
+
+  useEffect(() => {
+    fetch("/api/newsletters/senders")
+      .then((r) => r.json())
+      .then((d) => setSenders(d.senders ?? []))
+      .catch(() => {});
+  }, []);
+
+  const handleAdd = async () => {
+    if (!newName.trim()) { setError("Name is required"); return; }
+    setIsAdding(true);
+    setError("");
+    try {
+      const res = await fetch("/api/newsletters/senders", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name: newName.trim(), email: newEmail.trim() }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error);
+      setSenders(data.senders);
+      setNewName("");
+      setNewEmail("");
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to add sender");
+    } finally {
+      setIsAdding(false);
+    }
+  };
+
+  const handleDelete = async (id: string) => {
+    try {
+      const res = await fetch("/api/newsletters/senders", {
+        method: "DELETE",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ id }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error);
+      setSenders(data.senders);
+    } catch {}
+  };
+
+  return (
+    <div className="space-y-5">
+      <div>
+        <p className="text-xs mb-3" style={{ color: "#6F92BF" }}>
+          Newsletters from these senders will be scanned. Match is against the sender&apos;s display name (partial) or email address (exact).
+        </p>
+        <div className="space-y-2">
+          {senders.map((s) => (
+            <SenderRow key={s.id} sender={s} onDelete={handleDelete} />
+          ))}
+        </div>
+      </div>
+
+      {/* Add sender form */}
+      <div
+        className="rounded-xl p-4 space-y-3"
+        style={{ backgroundColor: "#F9FAFB", border: "1.5px dashed #A7B8D1" }}
+      >
+        <p className="text-xs font-semibold uppercase tracking-wider" style={{ color: "#323B6A", fontFamily: "var(--font-poppins), Poppins, sans-serif" }}>
+          Add sender
+        </p>
+        <input
+          type="text"
+          value={newName}
+          onChange={(e) => setNewName(e.target.value)}
+          placeholder="Sender display name (e.g. Morning Brew)"
+          className="w-full px-3 py-2 rounded-lg text-sm outline-none"
+          style={{ border: "1.5px solid #E7EDF3", color: "#323B6A", backgroundColor: "#FFFFFF" }}
+          onFocus={(e) => { e.currentTarget.style.borderColor = "#BDCF7C"; }}
+          onBlur={(e) => { e.currentTarget.style.borderColor = "#E7EDF3"; }}
+        />
+        <input
+          type="email"
+          value={newEmail}
+          onChange={(e) => setNewEmail(e.target.value)}
+          placeholder="Email address — optional, for exact match"
+          className="w-full px-3 py-2 rounded-lg text-sm outline-none"
+          style={{ border: "1.5px solid #E7EDF3", color: "#323B6A", backgroundColor: "#FFFFFF" }}
+          onFocus={(e) => { e.currentTarget.style.borderColor = "#BDCF7C"; }}
+          onBlur={(e) => { e.currentTarget.style.borderColor = "#E7EDF3"; }}
+        />
+        {error && <p className="text-xs" style={{ color: "#CC4444" }}>{error}</p>}
+        <button
+          onClick={handleAdd}
+          disabled={isAdding}
+          className="w-full py-2 rounded-lg text-sm font-semibold transition-all"
+          style={{
+            backgroundColor: isAdding ? "#E7EDF3" : "#323B6A",
+            color: isAdding ? "#A7B8D1" : "#FFFFFF",
+            fontFamily: "var(--font-poppins), Poppins, sans-serif",
+            fontWeight: 600,
+          }}
+        >
+          {isAdding ? "Adding…" : "Add Sender"}
+        </button>
+      </div>
+    </div>
+  );
+}
+
+// ── Connect Outlook screen ───────────────────────────────────────────────────
+
+function ConnectOutlookScreen() {
+  const [isConnecting, setIsConnecting] = useState(false);
+
+  return (
+    <div className="flex flex-col items-center text-center py-8">
+      {/* Microsoft envelope icon */}
+      <div
+        className="w-20 h-20 rounded-2xl flex items-center justify-center mb-6"
+        style={{ backgroundColor: "#E7EDF3" }}
+      >
+        <svg className="w-10 h-10" viewBox="0 0 24 24" fill="none">
+          <rect x="2" y="4" width="20" height="16" rx="2" stroke="#323B6A" strokeWidth="1.5" />
+          <path d="M2 8l10 6 10-6" stroke="#323B6A" strokeWidth="1.5" strokeLinecap="round" />
+          <rect x="14" y="14" width="8" height="6" rx="1" fill="#BDCF7C" />
+          <path d="M14 14l4 3 4-3" stroke="#323B6A" strokeWidth="1" strokeLinecap="round" />
         </svg>
       </div>
 
-      {/* Heading */}
       <h2
-        className="text-2xl mb-3"
-        style={{
-          fontFamily: "var(--font-poppins), Poppins, sans-serif",
-          fontWeight: 700,
-          color: "#323B6A",
-        }}
+        className="text-xl mb-2"
+        style={{ fontFamily: "var(--font-poppins), Poppins, sans-serif", fontWeight: 700, color: "#323B6A" }}
       >
-        Intelligence
+        Connect Outlook
       </h2>
-      <p className="text-sm leading-relaxed mb-6" style={{ color: "#6F92BF" }}>
-        Coming soon — Market intelligence, competitor analysis, and trend
-        spotting for the Sydney tech recruitment scene.
+      <p className="text-sm mb-6 max-w-sm" style={{ color: "#6F92BF" }}>
+        Grant read-only access to scan newsletters from approved senders and surface
+        relevant articles for your LinkedIn posts.
       </p>
 
-      {/* Feature previews */}
-      <div className="grid grid-cols-1 gap-3 text-left">
+      <ul className="text-left space-y-2 mb-8 w-full max-w-sm">
         {[
-          {
-            title: "Trend Radar",
-            desc: "Spot emerging hiring trends before they go mainstream",
-            color: "#DBEAA0",
-          },
-          {
-            title: "Competitor Watch",
-            desc: "Track what other recruiters are posting and talking about",
-            color: "#A7B8D1",
-          },
-          {
-            title: "Salary Insights",
-            desc: "Real-time salary benchmarks across Sydney tech roles",
-            color: "#FEEA99",
-          },
-        ].map((feature) => (
-          <div
-            key={feature.title}
-            className="flex items-start gap-3 rounded-xl p-4"
-            style={{ backgroundColor: "#FFFFFF", border: "1px solid #E7EDF3" }}
-          >
-            <div
-              className="w-8 h-8 rounded-lg flex-shrink-0 mt-0.5"
-              style={{ backgroundColor: feature.color }}
-            />
-            <div>
-              <h3
-                className="text-sm font-semibold mb-0.5"
-                style={{
-                  fontFamily: "var(--font-poppins), Poppins, sans-serif",
-                  color: "#323B6A",
-                }}
-              >
-                {feature.title}
-              </h3>
-              <p className="text-xs" style={{ color: "#6F92BF" }}>
-                {feature.desc}
-              </p>
-            </div>
-          </div>
+          "Scans inbox for newsletters you select",
+          "Extracts article titles & summaries",
+          "Scores relevance to your sectors",
+          "One-click to draft a Market Insight post",
+        ].map((item) => (
+          <li key={item} className="flex items-start gap-2 text-sm" style={{ color: "#323B6A" }}>
+            <span className="mt-0.5 flex-shrink-0" style={{ color: "#BDCF7C" }}>✓</span>
+            {item}
+          </li>
         ))}
-      </div>
+      </ul>
 
-      <div
-        className="mt-6 inline-flex items-center gap-2 px-4 py-2 rounded-full text-xs font-semibold"
+      <button
+        onClick={() => {
+          setIsConnecting(true);
+          signIn("azure-ad");
+        }}
+        disabled={isConnecting}
+        className="flex items-center gap-3 px-6 py-3 rounded-xl text-sm font-bold transition-all duration-200"
         style={{
-          backgroundColor: "#E7EDF3",
-          color: "#6F92BF",
+          backgroundColor: isConnecting ? "#E7EDF3" : "#323B6A",
+          color: isConnecting ? "#A7B8D1" : "#FFFFFF",
           fontFamily: "var(--font-poppins), Poppins, sans-serif",
+          fontWeight: 700,
+          boxShadow: isConnecting ? "none" : "0 4px 14px rgba(50,59,106,0.3)",
         }}
       >
-        <span className="w-1.5 h-1.5 rounded-full bg-current animate-pulse" />
-        Coming in Q2 2025
+        {isConnecting ? (
+          <>
+            <svg className="w-4 h-4 animate-spin" fill="none" viewBox="0 0 24 24">
+              <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+              <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+            </svg>
+            Connecting…
+          </>
+        ) : (
+          <>
+            <svg className="w-4 h-4" viewBox="0 0 23 23" fill="none">
+              <rect x="1" y="1" width="10" height="10" fill="#F25022" />
+              <rect x="12" y="1" width="10" height="10" fill="#7FBA00" />
+              <rect x="1" y="12" width="10" height="10" fill="#00A4EF" />
+              <rect x="12" y="12" width="10" height="10" fill="#FFB900" />
+            </svg>
+            Sign in with Microsoft
+          </>
+        )}
+      </button>
+
+      <p className="text-xs mt-4" style={{ color: "#A7B8D1" }}>
+        Read-only access · no emails stored externally
+      </p>
+    </div>
+  );
+}
+
+// ── Market Insight tab ───────────────────────────────────────────────────────
+
+function MarketInsightTab({
+  session,
+  onUseForPost,
+}: {
+  session: { user?: { name?: string | null; email?: string | null } };
+  onUseForPost: (article: ScoredArticle) => void;
+}) {
+  const [articles, setArticles] = useState<ScoredArticle[]>([]);
+  const [scannedAt, setScannedAt] = useState<string | null>(null);
+  const [scanState, setScanState] = useState<ScanState>("idle");
+  const [scanMeta, setScanMeta] = useState<{ checked: number; matched: number } | null>(null);
+  const [scanError, setScanError] = useState("");
+
+  // Load cached articles on mount
+  useEffect(() => {
+    fetch("/api/newsletters/scan")
+      .then((r) => r.json())
+      .then((d) => {
+        if (d.articles?.length > 0) {
+          setArticles(d.articles);
+          setScannedAt(d.scannedAt);
+          setScanState("done");
+        }
+      })
+      .catch(() => {});
+  }, []);
+
+  const handleScan = async () => {
+    setScanState("scanning");
+    setScanError("");
+    try {
+      const res = await fetch("/api/newsletters/scan", { method: "POST" });
+      const data = await res.json();
+
+      if (res.status === 401 && data.tokenExpired) {
+        signIn("azure-ad");
+        return;
+      }
+      if (!res.ok) throw new Error(data.error);
+
+      setArticles(data.articles ?? []);
+      setScannedAt(data.scannedAt);
+      setScanMeta({ checked: data.emailsChecked, matched: data.emailsMatched });
+      setScanState("done");
+    } catch (err) {
+      setScanError(err instanceof Error ? err.message : "Scan failed");
+      setScanState("error");
+    }
+  };
+
+  const top5 = articles.slice(0, 5);
+
+  return (
+    <div className="space-y-5">
+      {/* Status bar */}
+      <div
+        className="flex items-center justify-between px-4 py-3 rounded-xl"
+        style={{ backgroundColor: "#FFFFFF", border: "1.5px solid #E7EDF3" }}
+      >
+        <div className="flex items-center gap-2">
+          <div className="w-2 h-2 rounded-full" style={{ backgroundColor: "#BDCF7C" }} />
+          <span className="text-xs font-semibold" style={{ color: "#323B6A", fontFamily: "var(--font-poppins), Poppins, sans-serif" }}>
+            {session.user?.email ?? session.user?.name ?? "Connected"}
+          </span>
+          {scannedAt && (
+            <span className="text-xs" style={{ color: "#A7B8D1" }}>
+              · Last scan {formatDate(scannedAt)}
+            </span>
+          )}
+        </div>
+        <div className="flex items-center gap-2">
+          <button
+            onClick={handleScan}
+            disabled={scanState === "scanning"}
+            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold transition-all"
+            style={{
+              backgroundColor: scanState === "scanning" ? "#E7EDF3" : "#BDCF7C",
+              color: scanState === "scanning" ? "#A7B8D1" : "#323B6A",
+              fontFamily: "var(--font-poppins), Poppins, sans-serif",
+              fontWeight: 600,
+            }}
+          >
+            {scanState === "scanning" ? (
+              <>
+                <svg className="w-3.5 h-3.5 animate-spin" fill="none" viewBox="0 0 24 24">
+                  <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                  <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+                </svg>
+                Scanning…
+              </>
+            ) : (
+              <>
+                <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
+                    d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+                </svg>
+                Scan Now
+              </>
+            )}
+          </button>
+          <button
+            onClick={() => signOut()}
+            className="text-xs px-2.5 py-1.5 rounded-lg transition-all"
+            style={{ color: "#A7B8D1", backgroundColor: "transparent" }}
+            onMouseEnter={(e) => { (e.currentTarget as HTMLButtonElement).style.backgroundColor = "#E7EDF3"; }}
+            onMouseLeave={(e) => { (e.currentTarget as HTMLButtonElement).style.backgroundColor = "transparent"; }}
+          >
+            Disconnect
+          </button>
+        </div>
       </div>
+
+      {/* Scanning progress */}
+      {scanState === "scanning" && (
+        <div
+          className="flex items-center gap-3 px-4 py-4 rounded-xl"
+          style={{ backgroundColor: "#FFFFFF", border: "1.5px solid #E7EDF3" }}
+        >
+          <svg className="w-5 h-5 animate-spin flex-shrink-0" fill="none" viewBox="0 0 24 24">
+            <circle className="opacity-25" cx="12" cy="12" r="10" stroke="#BDCF7C" strokeWidth="4" />
+            <path className="opacity-75" fill="#BDCF7C" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+          </svg>
+          <div>
+            <p className="text-sm font-semibold" style={{ color: "#323B6A", fontFamily: "var(--font-poppins), Poppins, sans-serif" }}>
+              Scanning inbox…
+            </p>
+            <p className="text-xs mt-0.5" style={{ color: "#6F92BF" }}>
+              Fetching newsletters, extracting articles, scoring relevance. ~30 seconds.
+            </p>
+          </div>
+        </div>
+      )}
+
+      {/* Scan error */}
+      {scanState === "error" && (
+        <div className="px-4 py-3 rounded-xl" style={{ backgroundColor: "#FFF0F0", border: "1px solid #FFCCCC" }}>
+          <p className="text-sm font-semibold" style={{ color: "#CC4444" }}>Scan failed</p>
+          <p className="text-sm mt-0.5" style={{ color: "#CC4444" }}>{scanError}</p>
+        </div>
+      )}
+
+      {/* Scan meta */}
+      {scanState === "done" && scanMeta && (
+        <p className="text-xs px-1" style={{ color: "#A7B8D1" }}>
+          Checked {scanMeta.checked} emails · {scanMeta.matched} newsletter{scanMeta.matched !== 1 ? "s" : ""} matched
+          {articles.length > 0 ? ` · ${articles.length} article${articles.length !== 1 ? "s" : ""} scored` : ""}
+        </p>
+      )}
+
+      {/* Empty state */}
+      {scanState === "done" && articles.length === 0 && (
+        <div
+          className="rounded-xl px-5 py-8 text-center"
+          style={{ backgroundColor: "#FFFFFF", border: "1.5px solid #E7EDF3" }}
+        >
+          <p className="text-sm font-semibold mb-1" style={{ color: "#323B6A", fontFamily: "var(--font-poppins), Poppins, sans-serif" }}>
+            No matching newsletters found
+          </p>
+          <p className="text-sm" style={{ color: "#6F92BF" }}>
+            Make sure approved senders are in your inbox from the last 7 days, or add more senders in the Sources tab.
+          </p>
+        </div>
+      )}
+
+      {/* Article cards */}
+      {top5.length > 0 && (
+        <div className="space-y-4">
+          {top5.map((article) => (
+            <ArticleCard
+              key={article.id}
+              article={article}
+              onUse={() => onUseForPost(article)}
+            />
+          ))}
+          {articles.length > 5 && (
+            <p className="text-xs text-center" style={{ color: "#A7B8D1" }}>
+              Showing top 5 of {articles.length} articles by relevance score.
+            </p>
+          )}
+        </div>
+      )}
+
+      {/* First-run prompt */}
+      {scanState === "idle" && (
+        <div
+          className="rounded-xl px-5 py-8 text-center"
+          style={{ backgroundColor: "#FFFFFF", border: "1.5px solid #E7EDF3" }}
+        >
+          <p className="text-sm font-semibold mb-2" style={{ color: "#323B6A", fontFamily: "var(--font-poppins), Poppins, sans-serif" }}>
+            Ready to scan
+          </p>
+          <p className="text-sm mb-5" style={{ color: "#6F92BF" }}>
+            Hit Scan Now to fetch the last 7 days of newsletters and score articles for relevance.
+          </p>
+          <button
+            onClick={handleScan}
+            className="px-6 py-2.5 rounded-xl text-sm font-bold"
+            style={{
+              backgroundColor: "#BDCF7C",
+              color: "#323B6A",
+              fontFamily: "var(--font-poppins), Poppins, sans-serif",
+              fontWeight: 700,
+              boxShadow: "0 4px 14px rgba(189,207,124,0.4)",
+            }}
+          >
+            Scan Newsletters
+          </button>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ── Main panel ───────────────────────────────────────────────────────────────
+
+export default function IntelligencePanel({ onUseForPost }: Props) {
+  const { data: session, status } = useSession();
+  const [tab, setTab] = useState<Tab>("insight");
+
+  const isLoading = status === "loading";
+  const isConnected = status === "authenticated";
+
+  return (
+    <div className="max-w-3xl mx-auto px-6 py-8">
+      {/* Heading */}
+      <div className="mb-6">
+        <h1
+          className="text-2xl mb-1"
+          style={{ fontFamily: "var(--font-poppins), Poppins, sans-serif", fontWeight: 700, color: "#323B6A" }}
+        >
+          Market Insight
+        </h1>
+        <p className="text-sm" style={{ color: "#6F92BF" }}>
+          Newsletter scanner — surface relevant articles and draft posts in one click.
+        </p>
+      </div>
+
+      {isLoading && (
+        <div className="flex items-center gap-2 py-4">
+          <svg className="w-4 h-4 animate-spin" fill="none" viewBox="0 0 24 24">
+            <circle className="opacity-25" cx="12" cy="12" r="10" stroke="#BDCF7C" strokeWidth="4" />
+            <path className="opacity-75" fill="#BDCF7C" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+          </svg>
+          <span className="text-sm" style={{ color: "#6F92BF" }}>Checking connection…</span>
+        </div>
+      )}
+
+      {!isLoading && !isConnected && <ConnectOutlookScreen />}
+
+      {!isLoading && isConnected && session && (
+        <>
+          {/* Tabs */}
+          <div
+            className="flex border-b mb-6"
+            style={{ borderColor: "#E7EDF3" }}
+          >
+            {(["insight", "sources"] as Tab[]).map((t) => (
+              <button
+                key={t}
+                onClick={() => setTab(t)}
+                className="px-1 py-2.5 mr-6 text-sm font-medium transition-all duration-150"
+                style={{
+                  fontFamily: "var(--font-poppins), Poppins, sans-serif",
+                  fontWeight: 600,
+                  color: tab === t ? "#323B6A" : "#A7B8D1",
+                  borderBottom: tab === t ? "2px solid #BDCF7C" : "2px solid transparent",
+                  backgroundColor: "transparent",
+                }}
+              >
+                {t === "insight" ? "Market Insight" : "Newsletter Sources"}
+              </button>
+            ))}
+          </div>
+
+          {tab === "insight" && (
+            <MarketInsightTab session={session} onUseForPost={onUseForPost} />
+          )}
+          {tab === "sources" && <NewsletterSourcesTab />}
+        </>
+      )}
     </div>
   );
 }
