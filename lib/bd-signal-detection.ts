@@ -142,11 +142,20 @@ ${c.research ? c.research.substring(0, 900) : "No search results found."}`
 
 For each company below you have: the article signal AND web research about the company's actual size and location.
 
-Use the web research to make an evidence-based classification. Default to including as a bdLead when research is inconclusive — it is better to investigate a false positive than miss a real opportunity.
+CLASSIFICATION RULES — apply in strict order:
 
-Classify each company as:
-A) bdLead — Australian-based OR actively hiring in Australia, AND likely under 200 employees based on research
-B) marketInsight — research clearly shows: large enterprise (200+ employees), or definitively no AU connection
+STEP 1 — SIZE GATE (hard block, no exceptions):
+If research confirms the company has 200 or more employees → classify as marketInsight. Full stop.
+This applies even if they have an AU office or are actively hiring in Australia.
+Examples that must always be marketInsight: Anthropic (~1,000+ employees), Meta (100,000+), xAI (hundreds), any company described as "large", "enterprise", "global", or with 200+ staff confirmed.
+
+STEP 2 — AU GATE (only for companies that passed Step 1):
+The company must be PRIMARILY Australian-based (HQ or main operations in AU) OR be a startup/scale-up with a dedicated AU office or a role that is specifically located in Australia (not just "remote-friendly globally").
+Remote roles that any global company posts worldwide do NOT count as AU presence.
+
+STEP 3 — INCONCLUSIVE RESEARCH:
+If research returns no results and the company is genuinely unknown, classify as bdLead — it is better to investigate a false positive than miss a real opportunity.
+But: if a company is clearly recognisable as a large global player from the article context alone (e.g. well-known US tech giant), classify as marketInsight even without confirming research.
 
 Companies:
 ${companyBlocks}
@@ -163,19 +172,19 @@ Return a single JSON object:
       "detail": "Evidence from research: Sydney HQ per LinkedIn"
     },
     "initialRelevanceScore": 8,
-    "researchSummary": "1-2 sentences on what the research revealed about size and AU presence"
+    "researchSummary": "1-2 sentences on what research revealed about size and AU presence"
   }],
   "marketInsights": [{
     "companyName": "...",
     "sector": "ai",
     "signals": [...],
-    "whyExcluded": "Research confirms: [specific evidence — e.g. '3,000 employees per Crunchbase', 'US-only company with no AU hiring']"
+    "whyExcluded": "Research confirms: [specific evidence — e.g. '~1,000 employees per LinkedIn', 'US HQ, no AU office, remote-only posting']"
   }]
 }
 
-Rules:
-- If research is ambiguous or returns no results, classify as bdLead
-- whyExcluded must cite specific evidence from the research, not Claude's training assumptions
+Additional rules:
+- whyExcluded must cite specific evidence from the research, never Claude's training assumptions alone
+- For the size gate: if research shows a range, use the lower bound. If 200+ is plausible, exclude.
 - sector: "defence" | "ai" | "healthtech" | "sydney" | "general"
 - signal type: "funded" | "hiring" | "launch"
 - Return ONLY the JSON object — no markdown fences, no preamble.`,
