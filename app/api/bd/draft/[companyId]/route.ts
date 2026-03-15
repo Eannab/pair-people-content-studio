@@ -83,9 +83,13 @@ export async function POST(
         ? relevantSkills.slice(0, 5)
         : (candidate?.skills ?? []).slice(0, 5);
 
-    // Extract hiring role from signal context if signal type is "hiring"
+    // Split signal context by type so the prompt can branch correctly
     const hiringRole =
       signalHook?.type === "hiring" ? signalHook.context : "";
+    const growthSignal =
+      signalHook?.type !== "hiring"
+        ? `${signalHook?.label ?? ""}: ${signalHook?.context ?? ""}`.trim()
+        : "";
 
     // Employer line — "currently at X" or "just left X"
     const employerLine =
@@ -110,10 +114,10 @@ export async function POST(
           role: "user",
           content: `Write a cold outreach email from Éanna (co-founder, Pair People) to the hiring contact at ${lead.companyName}.
 
-COMPANY CONTEXT — use this to write the opening:
+COMPANY CONTEXT:
 - What they build: ${lead.overview || `${lead.companyName} — a ${lead.sector} company`}
 - Tech stack: ${lead.techStack.join(", ") || "unknown"}
-- Signal: ${hookContext}${hiringRole ? `\n- Role they're hiring for: ${hiringRole}` : ""}
+- Sector: ${lead.sector}${hiringRole ? `\n- Open role: ${hiringRole}` : ""}${growthSignal ? `\n- Growth signal: ${growthSignal}` : ""}
 - Recent activity: ${lead.recentActivity || ""}
 
 Contact: ${lead.hiringContact.name || "the hiring manager"}${lead.hiringContact.title ? `, ${lead.hiringContact.title}` : ""}
@@ -125,15 +129,24 @@ STRICT RULES — follow every one without exception:
 
 1. MAXIMUM 100 WORDS TOTAL. Count carefully. Cut ruthlessly.
 
-2. OPENING: Describe what ${lead.companyName} specifically builds or does — use the "What they build" field above. Write it as if you've actually looked at the company. Never open with "I saw your job posting" or "noticed you're growing". Lead with the product/platform/technology they're building.
-   Example format: "Saw [Company] is building [specific product] on [tech] — [brief why it's interesting]."
+2. OPENING — two cases, pick the right one:
 
-3. HIRING ROLE: If a role is listed above, reference it specifically (e.g. "building out your [role] team").
+   A) IF an open role is listed above: open by describing what ${lead.companyName} builds, then reference the specific role. Example: "Saw ${lead.companyName} is building [product] and hiring a [role] — thought this person might be worth a look."
+
+   B) IF no open role (only a funding/launch/expansion signal): open with what the company builds and the growth signal, then position the candidate as relevant to where they're heading — not what they're currently posting. Example: "Saw ${lead.companyName} just [signal detail] — timing might be good." Do NOT mention job postings. Do NOT imply they're actively hiring.
+
+   In both cases: never open with "I saw your job posting", "noticed you're growing", or any generic hiring observation. Lead with the product/platform.
+
+3. CANDIDATE RELEVANCE — two cases:
+
+   A) IF open role: connect the candidate's skills directly to the role requirements.
+
+   B) IF no open role: connect the candidate's sector experience and tech stack to what the company builds. A ${lead.sector} engineer with ${lead.techStack.slice(0, 2).join("/")} experience is relevant to ${lead.companyName} regardless of whether they're actively hiring. Make this the angle.
 
 4. STRUCTURE:
-   - 1 sentence: what the company builds + why you're reaching out now
+   - 1 sentence: what the company builds + the hook (role or growth signal)
    - 1 sentence: introduce the candidate by name, role, and current/recent employer
-   - 2-3 tight bullet points: candidate's skills and experience that are directly relevant to ${lead.companyName}'s stack
+   - 2-3 tight bullet points: candidate's skills and experience relevant to ${lead.companyName}'s stack and sector
    - 1 closing line
 
 5. CANDIDATE INTRO SENTENCE must include their current or most recent employer if known: "I have [Name], a [seniority] [role] currently at [Employer]" or "just left [Employer]".
