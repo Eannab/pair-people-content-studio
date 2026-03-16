@@ -14,6 +14,7 @@ export interface CVCandidate {
   fileName: string;
   fileModifiedAt?: string;
   indexedAt: string;
+  downloadFailed?: boolean;
 }
 
 export interface CVMatch {
@@ -29,7 +30,8 @@ export async function getTopCVMatches(
 ): Promise<CVMatch[]> {
   let index: CVCandidate[] = [];
   try {
-    index = (await kv.get<CVCandidate[]>("cv:index")) ?? [];
+    const indexRecord = (await kv.get<Record<string, CVCandidate>>("cv:index")) ?? {};
+    index = Object.values(indexRecord);
   } catch {
     return [];
   }

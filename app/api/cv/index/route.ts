@@ -59,7 +59,7 @@ export async function POST(request: NextRequest) {
     const encodedPath = folderPath
       .replace(/^\/+/, "")
       .split("/")
-      .map((seg) => encodeURIComponent(seg))
+      .map((seg) => encodeURIComponent(seg.replace(/'/g, "''")))
       .join("/");
 
     type DriveItem = {
@@ -160,7 +160,27 @@ export async function POST(request: NextRequest) {
           `https://graph.microsoft.com/v1.0/me/drive/items/${file.id}/content`,
           accessToken
         );
-        if (!downloadRes.ok) continue;
+        if (!downloadRes.ok) {
+          console.warn(`[cv/index] download failed for ${file.name}: HTTP ${downloadRes.status}`);
+          const fallbackName = file.name.replace(/\.[^.]+$/, "");
+          newCandidates.push({
+            id: uuidv4(),
+            name: fallbackName,
+            currentRole: "",
+            currentEmployer: "",
+            yearsExperience: 0,
+            skills: [],
+            sectorExperience: [],
+            location: "",
+            seniority: "mid",
+            fileName: file.name,
+            fileModifiedAt: file.lastModifiedDateTime ?? "",
+            indexedAt: now,
+            downloadFailed: true,
+          });
+          processedFileIds.push(file.id);
+          continue;
+        }
 
         const buffer = Buffer.from(await downloadRes.arrayBuffer());
         let text = "";
