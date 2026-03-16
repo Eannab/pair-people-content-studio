@@ -1,7 +1,7 @@
 "use client";
 
 import React, { useState } from "react";
-import BrandedCanvas, { CardType } from "./BrandedCanvas";
+import BrandedCanvas from "./BrandedCanvas";
 
 type ImageMode = "none" | "ai" | "branded";
 
@@ -585,60 +585,10 @@ function AIImageSection({
 
 // ── Branded section ──────────────────────────────────────────────────────────
 
-const CARD_TYPES: { id: CardType; label: string; desc: string }[] = [
-  { id: "pull-quote", label: "Pull Quote", desc: "Quote on navy with green accent" },
-  { id: "role-badge", label: "Role Badge", desc: "Role title, location & tech pills" },
-];
-
 function BrandedSection() {
-  const [cardType, setCardType] = useState<CardType>("pull-quote");
-
   return (
-    <div className="space-y-4 pt-4">
-      {/* Card type selector */}
-      <div>
-        <label
-          className="block text-xs font-semibold uppercase tracking-wider mb-2"
-          style={{
-            color: "#323B6A",
-            fontFamily: "var(--font-poppins), Poppins, sans-serif",
-          }}
-        >
-          Card Type
-        </label>
-        <div className="grid grid-cols-2 gap-2">
-          {CARD_TYPES.map(({ id, label, desc }) => {
-            const active = cardType === id;
-            return (
-              <button
-                key={id}
-                onClick={() => setCardType(id)}
-                className="px-3 py-3 rounded-xl text-left transition-all duration-150"
-                style={{
-                  backgroundColor: active ? "#323B6A" : "#FFFFFF",
-                  border: active ? "1.5px solid #323B6A" : "1.5px solid #E7EDF3",
-                  fontFamily: "var(--font-poppins), Poppins, sans-serif",
-                }}
-              >
-                <div
-                  className="text-xs font-semibold"
-                  style={{ color: active ? "#BDCF7C" : "#323B6A" }}
-                >
-                  {label}
-                </div>
-                <div
-                  className="text-xs mt-0.5"
-                  style={{ color: active ? "#A7B8D1" : "#6F92BF" }}
-                >
-                  {desc}
-                </div>
-              </button>
-            );
-          })}
-        </div>
-      </div>
-
-      <BrandedCanvas type={cardType} />
+    <div className="pt-4">
+      <BrandedCanvas />
     </div>
   );
 }

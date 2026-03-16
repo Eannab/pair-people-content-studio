@@ -2,23 +2,14 @@
 
 import React, { useRef, useEffect, useCallback, useState } from "react";
 
-export type CardType = "pull-quote" | "role-badge";
-
-export interface PullQuoteData {
-  quote: string;
-  attributionName: string;
-  attributionTitle: string;
-}
 export interface RoleBadgeData {
   title: string;    // e.g. "Senior Full Stack Engineer"
   location: string; // e.g. "Sydney, Australia"
   techStack: string; // comma-separated
 }
-export type CardData = PullQuoteData | RoleBadgeData;
 
-interface Props {
-  type: CardType;
-}
+// eslint-disable-next-line @typescript-eslint/no-empty-interface
+interface Props {}
 
 const W = 1200;
 const H = 627;
@@ -96,73 +87,6 @@ function drawLogo(ctx: CanvasRenderingContext2D) {
   ctx.textBaseline = "alphabetic";
   ctx.fillText("Pair People", W - 48, H - 36);
   ctx.restore();
-}
-
-// ── Pull Quote ────────────────────────────────────────────────────────────────
-
-function drawPullQuote(
-  ctx: CanvasRenderingContext2D,
-  data: PullQuoteData,
-  logo: HTMLImageElement | null
-) {
-  ctx.fillStyle = NAVY;
-  ctx.fillRect(0, 0, W, H);
-  drawWatermark(ctx, logo);
-
-  // Left accent bar
-  ctx.fillStyle = GREEN;
-  ctx.fillRect(40, 55, 8, H - 110);
-
-  // Decorative open-quote mark
-  ctx.save();
-  ctx.font = `normal 220px AlteHaasGrotesk, serif`;
-  ctx.fillStyle = GREEN;
-  ctx.globalAlpha = 0.1;
-  ctx.textAlign = "left";
-  ctx.textBaseline = "top";
-  ctx.fillText("\u201C", 62, -30);
-  ctx.restore();
-
-  // Quote text
-  const quoteText = data.quote
-    ? `\u201C${data.quote}\u201D`
-    : "\u201CYour quote will appear here\u201D";
-
-  ctx.save();
-  ctx.font = `normal 46px AlteHaasGrotesk, serif`;
-  ctx.fillStyle = data.quote ? WHITE : `${WHITE}55`;
-  ctx.textAlign = "left";
-  ctx.textBaseline = "top";
-
-  const maxWidth = W - 130 - 48;
-  const lines = wrapText(ctx, quoteText, maxWidth);
-  const lineHeight = 66;
-  const hasAttrib = !!(data.attributionName);
-  const attrHeight = hasAttrib ? 60 : 0;
-  const totalH = lines.length * lineHeight + attrHeight;
-  let y = Math.max(80, (H - totalH) / 2);
-
-  for (const line of lines) {
-    ctx.fillText(line, 76, y);
-    y += lineHeight;
-  }
-  ctx.restore();
-
-  // Attribution
-  if (data.attributionName) {
-    const attrLine = data.attributionTitle
-      ? `\u2014 ${data.attributionName}, ${data.attributionTitle}`
-      : `\u2014 ${data.attributionName}`;
-    ctx.save();
-    ctx.font = `normal 28px AlteHaasGrotesk, serif`;
-    ctx.fillStyle = GREEN;
-    ctx.textAlign = "left";
-    ctx.textBaseline = "top";
-    ctx.fillText(attrLine, 76, y + 10);
-    ctx.restore();
-  }
-
-  drawLogo(ctx);
 }
 
 // ── Role Badge ────────────────────────────────────────────────────────────────
@@ -445,12 +369,7 @@ function TextArea({
 
 // ── Main component ────────────────────────────────────────────────────────────
 
-export default function BrandedCanvas({ type }: Props) {
-  const [pullQuote, setPullQuote] = useState<PullQuoteData>({
-    quote: "",
-    attributionName: "",
-    attributionTitle: "",
-  });
+export default function BrandedCanvas(_props: Props) {
   const [roleBadge, setRoleBadge] = useState<RoleBadgeData>({
     title: "",
     location: "",
@@ -487,11 +406,8 @@ export default function BrandedCanvas({ type }: Props) {
     }
 
     ctx.clearRect(0, 0, W, H);
-    const logo = logoRef.current;
-
-    if (type === "pull-quote") drawPullQuote(ctx, pullQuote, logo);
-    else if (type === "role-badge") drawRoleBadge(ctx, roleBadge, logo);
-  }, [type, pullQuote, roleBadge, logoReady]); // eslint-disable-line react-hooks/exhaustive-deps
+    drawRoleBadge(ctx, roleBadge, logoRef.current);
+  }, [roleBadge, logoReady]); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
     render();
@@ -501,7 +417,7 @@ export default function BrandedCanvas({ type }: Props) {
     const canvas = canvasRef.current;
     if (!canvas) return;
     const link = document.createElement("a");
-    link.download = `pair-people-${type}.png`;
+    link.download = "pair-people-role-badge.png";
     link.href = canvas.toDataURL("image/png");
     link.click();
   };
@@ -509,66 +425,32 @@ export default function BrandedCanvas({ type }: Props) {
   return (
     <div className="space-y-5">
       {/* ── Form fields ── */}
-      {type === "pull-quote" && (
-        <div className="space-y-3">
-          <div>
-            <FieldLabel>Quote</FieldLabel>
-            <TextArea
-              value={pullQuote.quote}
-              onChange={(v) => setPullQuote((p) => ({ ...p, quote: v }))}
-              placeholder="Type the quote text here…"
-              rows={3}
-            />
-          </div>
-          <div className="grid grid-cols-2 gap-3">
-            <div>
-              <FieldLabel>Attribution name</FieldLabel>
-              <TextInput
-                value={pullQuote.attributionName}
-                onChange={(v) => setPullQuote((p) => ({ ...p, attributionName: v }))}
-                placeholder="e.g. Éanna Barry"
-              />
-            </div>
-            <div>
-              <FieldLabel hint="optional">Attribution title</FieldLabel>
-              <TextInput
-                value={pullQuote.attributionTitle}
-                onChange={(v) => setPullQuote((p) => ({ ...p, attributionTitle: v }))}
-                placeholder="e.g. Pair People"
-              />
-            </div>
-          </div>
+      <div className="space-y-3">
+        <div>
+          <FieldLabel>Title</FieldLabel>
+          <TextInput
+            value={roleBadge.title}
+            onChange={(v) => setRoleBadge((p) => ({ ...p, title: v }))}
+            placeholder="e.g. Senior Full Stack Engineer"
+          />
         </div>
-      )}
-
-      {type === "role-badge" && (
-        <div className="space-y-3">
-          <div>
-            <FieldLabel>Title</FieldLabel>
-            <TextInput
-              value={roleBadge.title}
-              onChange={(v) => setRoleBadge((p) => ({ ...p, title: v }))}
-              placeholder="e.g. Senior Full Stack Engineer"
-            />
-          </div>
-          <div>
-            <FieldLabel hint="optional">Role location</FieldLabel>
-            <TextInput
-              value={roleBadge.location}
-              onChange={(v) => setRoleBadge((p) => ({ ...p, location: v }))}
-              placeholder="e.g. Sydney, Australia"
-            />
-          </div>
-          <div>
-            <FieldLabel hint="comma-separated">Tech stack</FieldLabel>
-            <TextInput
-              value={roleBadge.techStack}
-              onChange={(v) => setRoleBadge((p) => ({ ...p, techStack: v }))}
-              placeholder="e.g. React, Node.js, AWS, TypeScript"
-            />
-          </div>
+        <div>
+          <FieldLabel hint="optional">Role location</FieldLabel>
+          <TextInput
+            value={roleBadge.location}
+            onChange={(v) => setRoleBadge((p) => ({ ...p, location: v }))}
+            placeholder="e.g. Sydney, Australia"
+          />
         </div>
-      )}
+        <div>
+          <FieldLabel hint="comma-separated">Tech stack</FieldLabel>
+          <TextInput
+            value={roleBadge.techStack}
+            onChange={(v) => setRoleBadge((p) => ({ ...p, techStack: v }))}
+            placeholder="e.g. React, Node.js, AWS, TypeScript"
+          />
+        </div>
+      </div>
 
       {/* ── Canvas preview ── */}
       <div
