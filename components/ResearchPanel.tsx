@@ -95,7 +95,7 @@ function CVIntelligenceTab() {
   };
 
   const scanCVs = async () => {
-    if (!session?.accessToken) return;
+    if (!session?.accessToken || session?.error === "RefreshAccessTokenError") return;
     setIsScanning(true);
     setError(null);
     try {
@@ -104,14 +104,26 @@ function CVIntelligenceTab() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ accessToken: session.accessToken }),
       });
-      const data = await res.json();
+      const bodyText = await res.text().catch(() => "");
+      let data: Record<string, unknown> = {};
+      try {
+        data = bodyText ? JSON.parse(bodyText) : {};
+      } catch {
+        // Non-JSON response (Vercel timeout HTML, gateway error, etc.)
+        const preview = bodyText.substring(0, 200).replace(/\s+/g, " ").trim();
+        throw new Error(
+          res.status === 504
+            ? "Scan timed out — your CV folder may be too large. Try reducing the number of files."
+            : `Server error (${res.status})${preview ? `: ${preview}` : ""}`
+        );
+      }
       if (res.status === 401 && data.tokenExpired) {
         signIn("azure-ad");
         return;
       }
-      if (!res.ok) throw new Error(data.error ?? "Scan failed");
-      setCandidates(data.candidates ?? []);
-      if (data.candidates?.length > 0) setLastIndexed(new Date().toISOString());
+      if (!res.ok) throw new Error((data.error as string) ?? "Scan failed");
+      setCandidates((data.candidates as CVCandidate[]) ?? []);
+      if ((data.candidates as CVCandidate[])?.length > 0) setLastIndexed(new Date().toISOString());
     } catch (err) {
       setError(err instanceof Error ? err.message : "Scan failed");
     } finally {
@@ -190,15 +202,15 @@ function CVIntelligenceTab() {
         </div>
         <button
           onClick={scanCVs}
-          disabled={isScanning || !session?.accessToken}
+          disabled={isScanning || !session?.accessToken || session?.error === "RefreshAccessTokenError"}
           className="flex items-center gap-2 px-4 py-2.5 rounded-xl text-sm font-semibold"
           style={{
             backgroundColor:
-              isScanning || !session?.accessToken ? PALE : NAVY,
-            color: isScanning || !session?.accessToken ? LIGHT_BLUE : "#FFFFFF",
+              isScanning || !session?.accessToken || session?.error === "RefreshAccessTokenError" ? PALE : NAVY,
+            color: isScanning || !session?.accessToken || session?.error === "RefreshAccessTokenError" ? LIGHT_BLUE : "#FFFFFF",
             fontFamily: "var(--font-poppins), Poppins, sans-serif",
             cursor:
-              isScanning || !session?.accessToken ? "not-allowed" : "pointer",
+              isScanning || !session?.accessToken || session?.error === "RefreshAccessTokenError" ? "not-allowed" : "pointer",
           }}
         >
           {isScanning ? (

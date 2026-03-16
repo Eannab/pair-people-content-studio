@@ -6,6 +6,8 @@ import { graphFetch, GraphAuthError } from "@/lib/graph";
 import type { CVCandidate } from "@/lib/cv-context";
 import type { CVSettings } from "@/app/api/cv/settings/route";
 
+export const maxDuration = 60;
+
 const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
 
 // GET — return current CV index
