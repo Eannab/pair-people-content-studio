@@ -8,6 +8,8 @@ export interface RoleBadgeData {
   techStack: string; // comma-separated
 }
 
+type Layout = "A" | "B";
+
 // eslint-disable-next-line @typescript-eslint/no-empty-interface
 interface Props {}
 
@@ -18,6 +20,19 @@ const NAVY = "#323B6A";
 const GREEN = "#BDCF7C";
 const LIGHT_BLUE = "#A7B8D1";
 const WHITE = "#FFFFFF";
+
+// Shared pill / spacing constants
+const PILL_PAD_X = 22;
+const PILL_PAD_Y = 11;
+const PILL_H = 22 + PILL_PAD_Y * 2; // 44
+const PILL_GAP = 14;
+const PILL_ROW_GAP = 12;
+const TITLE_LH = 74;
+const LOCATION_H = 36;
+const GAP_TITLE_LOC = 14;
+const GAP_LOC_DIV = 18;
+const GAP_TITLE_DIV = 14;
+const GAP_DIV_PILLS = 20;
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -63,16 +78,90 @@ function roundRect(
   ctx.closePath();
 }
 
-// ── Watermark ─────────────────────────────────────────────────────────────────
+// ── Shared: measure pills into rows ──────────────────────────────────────────
 
-function drawWatermark(ctx: CanvasRenderingContext2D, logo: HTMLImageElement | null) {
-  if (!logo || logo.width === 0) return;
-  const size = 380;
-  const x = W - size - 20;
-  const y = (H - size) / 2;
+function measurePills(
+  ctx: CanvasRenderingContext2D,
+  techs: string[],
+  maxRowW: number
+): { pillWidths: number[]; pillRows: number[][] } {
+  if (techs.length === 0) return { pillWidths: [], pillRows: [] };
+  ctx.font = `normal 22px AlteHaasGrotesk, sans-serif`;
+  const pillWidths = techs.map((t) => ctx.measureText(t).width + PILL_PAD_X * 2);
+  const pillRows: number[][] = [];
+  let rowItems: number[] = [];
+  let rowW = 0;
+  for (let i = 0; i < techs.length; i++) {
+    const pw = pillWidths[i];
+    if (rowItems.length > 0 && rowW + PILL_GAP + pw > maxRowW) {
+      pillRows.push(rowItems);
+      rowItems = [i];
+      rowW = pw;
+    } else {
+      rowItems.push(i);
+      rowW = rowItems.length === 1 ? pw : rowW + PILL_GAP + pw;
+    }
+  }
+  if (rowItems.length > 0) pillRows.push(rowItems);
+  return { pillWidths, pillRows };
+}
+
+function pillBlockHeight(pillRows: number[][]): number {
+  return pillRows.length > 0
+    ? pillRows.length * PILL_H + (pillRows.length - 1) * PILL_ROW_GAP
+    : 0;
+}
+
+function totalContentHeight(
+  titleLines: number,
+  hasLocation: boolean,
+  hasPills: boolean,
+  pillBlockH: number
+): number {
+  return (
+    titleLines * TITLE_LH +
+    (hasLocation ? GAP_TITLE_LOC + LOCATION_H : 0) +
+    (hasPills
+      ? (hasLocation ? GAP_LOC_DIV : GAP_TITLE_DIV) + 1 + GAP_DIV_PILLS + pillBlockH
+      : 0)
+  );
+}
+
+// ── Shared: draw pills ────────────────────────────────────────────────────────
+
+function drawPillRows(
+  ctx: CanvasRenderingContext2D,
+  techs: string[],
+  pillWidths: number[],
+  pillRows: number[][],
+  startY: number,
+  anchorFn: (rowIdxs: number[]) => number // returns left x for a given row
+) {
   ctx.save();
-  ctx.globalAlpha = 0.12;
-  ctx.drawImage(logo, x, y, size, size);
+  ctx.font = `normal 22px AlteHaasGrotesk, sans-serif`;
+  let y = startY;
+  for (const rowIdxs of pillRows) {
+    let px = anchorFn(rowIdxs);
+    for (const i of rowIdxs) {
+      const pw = pillWidths[i];
+      ctx.globalAlpha = 0.25;
+      ctx.fillStyle = LIGHT_BLUE;
+      roundRect(ctx, px, y, pw, PILL_H, PILL_H / 2);
+      ctx.fill();
+      ctx.globalAlpha = 0.4;
+      ctx.strokeStyle = LIGHT_BLUE;
+      ctx.lineWidth = 1;
+      roundRect(ctx, px, y, pw, PILL_H, PILL_H / 2);
+      ctx.stroke();
+      ctx.globalAlpha = 1;
+      ctx.fillStyle = WHITE;
+      ctx.textAlign = "center";
+      ctx.textBaseline = "middle";
+      ctx.fillText(techs[i], px + pw / 2, y + PILL_H / 2);
+      px += pw + PILL_GAP;
+    }
+    y += PILL_H + PILL_ROW_GAP;
+  }
   ctx.restore();
 }
 
@@ -89,91 +178,51 @@ function drawLogo(ctx: CanvasRenderingContext2D) {
   ctx.restore();
 }
 
-// ── Role Badge ────────────────────────────────────────────────────────────────
+// ── Layout A — Full canvas, centered ─────────────────────────────────────────
 
-function drawRoleBadge(
+function drawLayoutA(
   ctx: CanvasRenderingContext2D,
   data: RoleBadgeData,
   logo: HTMLImageElement | null
 ) {
+  // Background
   ctx.fillStyle = NAVY;
   ctx.fillRect(0, 0, W, H);
-  drawWatermark(ctx, logo);
+
+  // Watermark centre-right, 15% opacity
+  if (logo && logo.width > 0) {
+    const size = 380;
+    ctx.save();
+    ctx.globalAlpha = 0.15;
+    ctx.drawImage(logo, W - size - 20, (H - size) / 2, size, size);
+    ctx.restore();
+  }
 
   const cx = W / 2;
   const HMARGIN = 80;
 
-  // ── Measure title ──────────────────────────────────────────────────────────
+  // Measure title
   ctx.font = `600 60px Poppins, sans-serif`;
   const titleText = data.title || "Senior Full Stack Engineer";
   const titleLines = wrapText(ctx, titleText, W - HMARGIN * 2);
-  const TITLE_LH = 74;
-  const titleBlockH = titleLines.length * TITLE_LH;
 
-  // ── Measure pills ──────────────────────────────────────────────────────────
+  // Measure pills
   const techs = data.techStack
     ? data.techStack.split(",").map((t) => t.trim()).filter(Boolean)
     : [];
+  const { pillWidths, pillRows } = measurePills(ctx, techs, W - HMARGIN * 2);
+  const pillBlockH = pillBlockHeight(pillRows);
 
-  const PILL_PAD_X = 22;
-  const PILL_PAD_Y = 11;
-  const PILL_H = 22 + PILL_PAD_Y * 2; // 44px
-  const PILL_GAP = 14;
-  const PILL_ROW_GAP = 12;
-
-  let pillWidths: number[] = [];
-  let pillRows: number[][] = [];
-
-  if (techs.length > 0) {
-    ctx.font = `normal 22px AlteHaasGrotesk, sans-serif`;
-    pillWidths = techs.map((t) => ctx.measureText(t).width + PILL_PAD_X * 2);
-
-    const maxRowW = W - HMARGIN * 2;
-    let rowItems: number[] = [];
-    let rowW = 0;
-
-    for (let i = 0; i < techs.length; i++) {
-      const pw = pillWidths[i];
-      if (rowItems.length > 0 && rowW + PILL_GAP + pw > maxRowW) {
-        pillRows.push(rowItems);
-        rowItems = [i];
-        rowW = pw;
-      } else {
-        rowItems.push(i);
-        rowW = rowItems.length === 1 ? pw : rowW + PILL_GAP + pw;
-      }
-    }
-    if (rowItems.length > 0) pillRows.push(rowItems);
-  }
-
-  const pillBlockH =
-    pillRows.length > 0
-      ? pillRows.length * PILL_H + (pillRows.length - 1) * PILL_ROW_GAP
-      : 0;
-
-  // ── Total content height & start Y ────────────────────────────────────────
   const hasLocation = !!data.location;
   const hasPills = pillRows.length > 0;
-  const LOCATION_H = 36;
-  const GAP_TITLE_LOC = 14;
-  const GAP_LOC_DIV = 18;
-  const GAP_TITLE_DIV = 14;
-  const GAP_DIV_PILLS = 20;
-
-  const totalH =
-    titleBlockH +
-    (hasLocation ? GAP_TITLE_LOC + LOCATION_H : 0) +
-    (hasPills
-      ? (hasLocation ? GAP_LOC_DIV : GAP_TITLE_DIV) + 1 + GAP_DIV_PILLS + pillBlockH
-      : 0);
-
+  const totalH = totalContentHeight(titleLines.length, hasLocation, hasPills, pillBlockH);
   const startY = Math.round((H - totalH) / 2);
 
-  // ── Top accent line ────────────────────────────────────────────────────────
+  // Top accent line (centered, above content block)
   ctx.fillStyle = GREEN;
   ctx.fillRect(cx - 40, Math.max(40, startY - 28), 80, 4);
 
-  // ── Title ─────────────────────────────────────────────────────────────────
+  // Title — centered
   ctx.save();
   ctx.font = `600 60px Poppins, sans-serif`;
   ctx.fillStyle = data.title ? WHITE : `${WHITE}44`;
@@ -186,24 +235,19 @@ function drawRoleBadge(
   }
   ctx.restore();
 
-  // ── Location ──────────────────────────────────────────────────────────────
+  // Location — centered
   if (hasLocation) {
     y += GAP_TITLE_LOC;
-
-    // Small location dot before text
     ctx.save();
     ctx.font = `normal 28px AlteHaasGrotesk, serif`;
-    const locWidth = ctx.measureText(data.location).width;
-    const dotCX = cx - locWidth / 2 - 14;
-    const dotCY = y + 14;
+    const locW = ctx.measureText(data.location).width;
     ctx.fillStyle = LIGHT_BLUE;
     ctx.globalAlpha = 0.65;
     ctx.beginPath();
-    ctx.arc(dotCX, dotCY, 4, 0, Math.PI * 2);
+    ctx.arc(cx - locW / 2 - 14, y + 14, 4, 0, Math.PI * 2);
     ctx.fill();
     ctx.restore();
 
-    // Location text
     ctx.save();
     ctx.font = `normal 28px AlteHaasGrotesk, serif`;
     ctx.fillStyle = LIGHT_BLUE;
@@ -212,13 +256,12 @@ function drawRoleBadge(
     ctx.fillText(data.location, cx, y);
     ctx.restore();
 
-    y += LOCATION_H;
-    y += GAP_LOC_DIV;
+    y += LOCATION_H + GAP_LOC_DIV;
   } else if (hasPills) {
     y += GAP_TITLE_DIV;
   }
 
-  // ── Divider ───────────────────────────────────────────────────────────────
+  // Divider — centered
   if (hasPills) {
     ctx.save();
     ctx.strokeStyle = `${LIGHT_BLUE}44`;
@@ -231,45 +274,168 @@ function drawRoleBadge(
     y += 1 + GAP_DIV_PILLS;
   }
 
-  // ── Tech pills ────────────────────────────────────────────────────────────
+  // Pills — each row centered
   if (hasPills) {
-    ctx.save();
-    ctx.font = `normal 22px AlteHaasGrotesk, sans-serif`;
-
-    for (const rowIdxs of pillRows) {
+    drawPillRows(ctx, techs, pillWidths, pillRows, y, (rowIdxs) => {
       const rowW =
         rowIdxs.reduce((s, i) => s + pillWidths[i], 0) +
         PILL_GAP * (rowIdxs.length - 1);
-      let px = cx - rowW / 2;
-
-      for (const i of rowIdxs) {
-        const pw = pillWidths[i];
-
-        ctx.globalAlpha = 0.25;
-        ctx.fillStyle = LIGHT_BLUE;
-        roundRect(ctx, px, y, pw, PILL_H, PILL_H / 2);
-        ctx.fill();
-
-        ctx.globalAlpha = 0.4;
-        ctx.strokeStyle = LIGHT_BLUE;
-        ctx.lineWidth = 1;
-        roundRect(ctx, px, y, pw, PILL_H, PILL_H / 2);
-        ctx.stroke();
-
-        ctx.globalAlpha = 1;
-        ctx.fillStyle = WHITE;
-        ctx.textAlign = "center";
-        ctx.textBaseline = "middle";
-        ctx.fillText(techs[i], px + pw / 2, y + PILL_H / 2);
-
-        px += pw + PILL_GAP;
-      }
-      y += PILL_H + PILL_ROW_GAP;
-    }
-    ctx.restore();
+      return cx - rowW / 2;
+    });
   }
 
   drawLogo(ctx);
+}
+
+// ── Layout B — Left-aligned with accent bar ───────────────────────────────────
+
+function drawLayoutB(
+  ctx: CanvasRenderingContext2D,
+  data: RoleBadgeData,
+  logo: HTMLImageElement | null
+) {
+  // Background
+  ctx.fillStyle = NAVY;
+  ctx.fillRect(0, 0, W, H);
+
+  // Watermark right side, 20% opacity (clear of text content)
+  if (logo && logo.width > 0) {
+    const size = 380;
+    ctx.save();
+    ctx.globalAlpha = 0.20;
+    ctx.drawImage(logo, W - size - 20, (H - size) / 2, size, size);
+    ctx.restore();
+  }
+
+  // Green left accent bar — full height
+  ctx.fillStyle = GREEN;
+  ctx.fillRect(0, 0, 8, H);
+
+  const LEFT = 80;        // content left edge (8px bar + 72px padding)
+  const MAX_W = 680;      // keep text clear of watermark on right
+
+  // Measure title
+  ctx.font = `600 60px Poppins, sans-serif`;
+  const titleText = data.title || "Senior Full Stack Engineer";
+  const titleLines = wrapText(ctx, titleText, MAX_W);
+
+  // Measure pills
+  const techs = data.techStack
+    ? data.techStack.split(",").map((t) => t.trim()).filter(Boolean)
+    : [];
+  const { pillWidths, pillRows } = measurePills(ctx, techs, MAX_W);
+  const pillBlockH = pillBlockHeight(pillRows);
+
+  const hasLocation = !!data.location;
+  const hasPills = pillRows.length > 0;
+  const totalH = totalContentHeight(titleLines.length, hasLocation, hasPills, pillBlockH);
+  const startY = Math.round((H - totalH) / 2);
+
+  // Title — left-aligned
+  ctx.save();
+  ctx.font = `600 60px Poppins, sans-serif`;
+  ctx.fillStyle = data.title ? WHITE : `${WHITE}44`;
+  ctx.textAlign = "left";
+  ctx.textBaseline = "top";
+  let y = startY;
+  for (const line of titleLines) {
+    ctx.fillText(line, LEFT, y);
+    y += TITLE_LH;
+  }
+  ctx.restore();
+
+  // Location — left-aligned
+  if (hasLocation) {
+    y += GAP_TITLE_LOC;
+
+    // Small dot
+    ctx.save();
+    ctx.fillStyle = LIGHT_BLUE;
+    ctx.globalAlpha = 0.65;
+    ctx.beginPath();
+    ctx.arc(LEFT + 6, y + 14, 4, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.restore();
+
+    ctx.save();
+    ctx.font = `normal 28px AlteHaasGrotesk, serif`;
+    ctx.fillStyle = LIGHT_BLUE;
+    ctx.textAlign = "left";
+    ctx.textBaseline = "top";
+    ctx.fillText(data.location, LEFT + 20, y);
+    ctx.restore();
+
+    y += LOCATION_H + GAP_LOC_DIV;
+  } else if (hasPills) {
+    y += GAP_TITLE_DIV;
+  }
+
+  // Divider — left-aligned
+  if (hasPills) {
+    ctx.save();
+    ctx.strokeStyle = `${LIGHT_BLUE}44`;
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.moveTo(LEFT, y);
+    ctx.lineTo(LEFT + 200, y);
+    ctx.stroke();
+    ctx.restore();
+    y += 1 + GAP_DIV_PILLS;
+  }
+
+  // Pills — left-aligned rows
+  if (hasPills) {
+    drawPillRows(ctx, techs, pillWidths, pillRows, y, () => LEFT);
+  }
+
+  drawLogo(ctx);
+}
+
+// ── Layout thumbnail SVGs ─────────────────────────────────────────────────────
+
+function ThumbA() {
+  return (
+    <svg width="100%" viewBox="0 0 120 63" fill="none" xmlns="http://www.w3.org/2000/svg">
+      <rect width="120" height="63" fill="#323B6A" />
+      {/* Watermark */}
+      <circle cx="93" cy="32" r="22" fill="#A7B8D1" opacity="0.13" />
+      {/* Top accent bar */}
+      <rect x="50" y="10" width="20" height="2.5" rx="1.25" fill="#BDCF7C" />
+      {/* Title */}
+      <rect x="20" y="17" width="80" height="7" rx="3.5" fill="white" opacity="0.85" />
+      {/* Location */}
+      <rect x="35" y="29" width="50" height="4.5" rx="2.25" fill="#A7B8D1" opacity="0.65" />
+      {/* Divider */}
+      <line x1="42" y1="38.5" x2="78" y2="38.5" stroke="#A7B8D1" strokeWidth="0.75" opacity="0.4" />
+      {/* Pills */}
+      <rect x="16" y="43" width="20" height="9" rx="4.5" fill="#A7B8D1" opacity="0.28" />
+      <rect x="40" y="43" width="16" height="9" rx="4.5" fill="#A7B8D1" opacity="0.28" />
+      <rect x="60" y="43" width="22" height="9" rx="4.5" fill="#A7B8D1" opacity="0.28" />
+      <rect x="86" y="43" width="14" height="9" rx="4.5" fill="#A7B8D1" opacity="0.28" />
+    </svg>
+  );
+}
+
+function ThumbB() {
+  return (
+    <svg width="100%" viewBox="0 0 120 63" fill="none" xmlns="http://www.w3.org/2000/svg">
+      <rect width="120" height="63" fill="#323B6A" />
+      {/* Watermark */}
+      <circle cx="96" cy="32" r="21" fill="#A7B8D1" opacity="0.18" />
+      {/* Green accent bar */}
+      <rect x="0" y="0" width="5" height="63" fill="#BDCF7C" />
+      {/* Title */}
+      <rect x="14" y="14" width="65" height="7" rx="3.5" fill="white" opacity="0.85" />
+      {/* Location */}
+      <rect x="14" y="26" width="44" height="4.5" rx="2.25" fill="#A7B8D1" opacity="0.65" />
+      {/* Divider */}
+      <line x1="14" y1="35.5" x2="50" y2="35.5" stroke="#A7B8D1" strokeWidth="0.75" opacity="0.4" />
+      {/* Pills */}
+      <rect x="14" y="40" width="18" height="9" rx="4.5" fill="#A7B8D1" opacity="0.28" />
+      <rect x="36" y="40" width="15" height="9" rx="4.5" fill="#A7B8D1" opacity="0.28" />
+      <rect x="55" y="40" width="20" height="9" rx="4.5" fill="#A7B8D1" opacity="0.28" />
+    </svg>
+  );
 }
 
 // ── Input helpers ─────────────────────────────────────────────────────────────
@@ -337,39 +503,10 @@ function TextInput({
   );
 }
 
-function TextArea({
-  value,
-  onChange,
-  placeholder,
-  rows = 3,
-}: {
-  value: string;
-  onChange: (v: string) => void;
-  placeholder?: string;
-  rows?: number;
-}) {
-  return (
-    <textarea
-      value={value}
-      onChange={(e) => onChange(e.target.value)}
-      placeholder={placeholder}
-      rows={rows}
-      style={{ ...inputBase, resize: "none" }}
-      onFocus={(e) => {
-        e.currentTarget.style.borderColor = "#BDCF7C";
-        e.currentTarget.style.boxShadow = "0 0 0 3px rgba(189,207,124,0.15)";
-      }}
-      onBlur={(e) => {
-        e.currentTarget.style.borderColor = "#E7EDF3";
-        e.currentTarget.style.boxShadow = "none";
-      }}
-    />
-  );
-}
-
 // ── Main component ────────────────────────────────────────────────────────────
 
 export default function BrandedCanvas(_props: Props) {
+  const [layout, setLayout] = useState<Layout>("A");
   const [roleBadge, setRoleBadge] = useState<RoleBadgeData>({
     title: "",
     location: "",
@@ -382,10 +519,7 @@ export default function BrandedCanvas(_props: Props) {
 
   useEffect(() => {
     const img = new Image();
-    img.onload = () => {
-      logoRef.current = img;
-      setLogoReady(true);
-    };
+    img.onload = () => { logoRef.current = img; setLogoReady(true); };
     img.onerror = () => setLogoReady(true);
     img.src = "/Pair%20People%20logo%20Final.gif";
   }, []);
@@ -395,35 +529,69 @@ export default function BrandedCanvas(_props: Props) {
     if (!canvas) return;
     const ctx = canvas.getContext("2d");
     if (!ctx) return;
-
     try {
       await Promise.all([
         document.fonts.load(`normal 46px AlteHaasGrotesk`),
         document.fonts.load(`600 60px Poppins`),
       ]);
-    } catch {
-      // continue with fallbacks
-    }
+    } catch { /* continue with fallbacks */ }
 
     ctx.clearRect(0, 0, W, H);
-    drawRoleBadge(ctx, roleBadge, logoRef.current);
-  }, [roleBadge, logoReady]); // eslint-disable-line react-hooks/exhaustive-deps
+    if (layout === "A") drawLayoutA(ctx, roleBadge, logoRef.current);
+    else               drawLayoutB(ctx, roleBadge, logoRef.current);
+  }, [layout, roleBadge, logoReady]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  useEffect(() => {
-    render();
-  }, [render]);
+  useEffect(() => { render(); }, [render]);
 
   const handleDownload = () => {
     const canvas = canvasRef.current;
     if (!canvas) return;
     const link = document.createElement("a");
-    link.download = "pair-people-role-badge.png";
+    link.download = `pair-people-role-badge-${layout.toLowerCase()}.png`;
     link.href = canvas.toDataURL("image/png");
     link.click();
   };
 
   return (
     <div className="space-y-5">
+      {/* ── Layout toggle ── */}
+      <div>
+        <FieldLabel>Layout</FieldLabel>
+        <div className="grid grid-cols-2 gap-2">
+          {(["A", "B"] as Layout[]).map((id) => {
+            const active = layout === id;
+            return (
+              <button
+                key={id}
+                onClick={() => setLayout(id)}
+                className="rounded-xl overflow-hidden transition-all duration-150"
+                style={{
+                  border: active ? "2px solid #323B6A" : "1.5px solid #E7EDF3",
+                  backgroundColor: active ? "#F4F5F9" : "#FFFFFF",
+                  padding: 0,
+                  cursor: "pointer",
+                }}
+              >
+                {/* Thumbnail preview */}
+                <div className="w-full">{id === "A" ? <ThumbA /> : <ThumbB />}</div>
+                {/* Label */}
+                <div
+                  className="py-1.5 text-center text-xs"
+                  style={{
+                    color: active ? "#323B6A" : "#6F92BF",
+                    fontFamily: "var(--font-poppins), Poppins, sans-serif",
+                    fontWeight: active ? 600 : 400,
+                    borderTop: "1px solid #E7EDF3",
+                  }}
+                >
+                  {id === "A" ? "Centered" : "Left aligned"}
+                </div>
+              </button>
+            );
+          })}
+        </div>
+      </div>
+
       {/* ── Form fields ── */}
       <div className="space-y-3">
         <div>
@@ -475,20 +643,12 @@ export default function BrandedCanvas(_props: Props) {
           fontFamily: "var(--font-poppins), Poppins, sans-serif",
           fontWeight: 600,
         }}
-        onMouseEnter={(e) => {
-          (e.currentTarget as HTMLButtonElement).style.backgroundColor = "#2A3260";
-        }}
-        onMouseLeave={(e) => {
-          (e.currentTarget as HTMLButtonElement).style.backgroundColor = "#323B6A";
-        }}
+        onMouseEnter={(e) => { (e.currentTarget as HTMLButtonElement).style.backgroundColor = "#2A3260"; }}
+        onMouseLeave={(e) => { (e.currentTarget as HTMLButtonElement).style.backgroundColor = "#323B6A"; }}
       >
         <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-          <path
-            strokeLinecap="round"
-            strokeLinejoin="round"
-            strokeWidth={2}
-            d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"
-          />
+          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
+            d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
         </svg>
         Download PNG
       </button>
