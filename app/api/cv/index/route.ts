@@ -1,297 +1,154 @@
-import { NextRequest, NextResponse } from "next/server";
-import Anthropic from "@anthropic-ai/sdk";
+import { NextResponse } from "next/server";
 import { kv } from "@vercel/kv";
 import { v4 as uuidv4 } from "uuid";
-import { graphFetch, GraphAuthError } from "@/lib/graph";
+import { getServerSession } from "next-auth/next";
+import { authOptions } from "@/lib/auth";
+import { graphFetch } from "@/lib/graph";
 import type { CVCandidate } from "@/lib/cv-context";
-import type { CVSettings } from "@/app/api/cv/settings/route";
 
 export const maxDuration = 60;
 
-const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
 const BATCH_SIZE = 5;
-const CLAUDE_TIMEOUT_MS = 8000;
 
-// GET — return current CV index
+const FOLDER_URL =
+  "https://graph.microsoft.com/v1.0/me/drive/root:/CV%27s:/children?$top=200&$select=id,name,file";
+
+type DriveItem = { id: string; name: string; file?: object };
+
+// GET — return index stats + candidates
 export async function GET() {
   try {
-    const indexRecord = (await kv.get<Record<string, CVCandidate>>("cv:index")) ?? {};
-    const index = Object.values(indexRecord);
-    return NextResponse.json({ candidates: index, count: index.length });
+    const [indexRecord, indexedFileIds] = await Promise.all([
+      kv.get<Record<string, CVCandidate>>("cv:index"),
+      kv.get<string[]>("cv:indexed-file-ids"),
+    ]);
+    const candidates = Object.values(indexRecord ?? {});
+    return NextResponse.json({
+      count: candidates.length,
+      indexedFileCount: (indexedFileIds ?? []).length,
+      candidates,
+    });
   } catch (err) {
-    console.error("cv/index GET error:", err);
-    return NextResponse.json({ error: "Failed to load index" }, { status: 500 });
+    console.error("[cv/index] GET error:", err);
+    return NextResponse.json(
+      { error: err instanceof Error ? err.message : "Failed to load index" },
+      { status: 500 }
+    );
   }
 }
 
-// POST — process next batch of CVs from OneDrive
-export async function POST(request: NextRequest) {
+// POST — index next batch of CV files as stubs (no download, no parsing)
+export async function POST() {
   try {
-    const body = await request.json().catch(() => ({}));
-    const accessToken: string | undefined = body.accessToken;
-
-    if (!accessToken) {
-      return NextResponse.json({ error: "accessToken required" }, { status: 400 });
-    }
-
-    const settings = await kv.get<CVSettings>("cv:settings");
-    const folderPath = settings?.folderPath?.trim() || "/Active CVs";
-
-    // ── Pre-flight: verify the token is still valid ───────────────────────────
-    {
-      const meRes = await graphFetch(
-        "https://graph.microsoft.com/v1.0/me?$select=id",
-        accessToken
+    const session = await getServerSession(authOptions);
+    if (!session?.accessToken) {
+      return NextResponse.json(
+        { error: "Not authenticated. Please sign in with Microsoft." },
+        { status: 401 }
       );
-      if (!meRes.ok) {
-        const bodyText = await meRes.text().catch(() => "");
-        let msg = `Graph API ${meRes.status}`;
-        try { msg = (JSON.parse(bodyText) as { error?: { message?: string } })?.error?.message ?? msg; }
-        catch { if (bodyText) msg = bodyText.substring(0, 200); }
-        return NextResponse.json(
-          { error: `Microsoft token check failed: ${msg}` },
-          { status: 502 }
-        );
-      }
     }
+    const accessToken = session.accessToken;
 
-    // ── List files in the OneDrive folder ────────────────────────────────────
-    const encodedPath = folderPath
-      .replace(/^\/+/, "")
-      .split("/")
-      .map((seg) => encodeURIComponent(seg).replace(/'/g, "%27"))
-      .join("/");
-
-    type DriveItem = {
-      id: string;
-      name: string;
-      file?: { mimeType: string };
-      lastModifiedDateTime?: string;
-    };
+    // ── List all files in the CV's folder ────────────────────────────────────
     const allItems: DriveItem[] = [];
-    let nextUrl: string | null =
-      `https://graph.microsoft.com/v1.0/me/drive/root:/${encodedPath}:/children?$select=id,name,file,lastModifiedDateTime&$top=200`;
+    let nextUrl: string | null = FOLDER_URL;
 
     while (nextUrl) {
-      const listRes = await graphFetch(nextUrl, accessToken);
-      const bodyText = await listRes.text().catch(() => "");
+      const res = await graphFetch(nextUrl, accessToken);
+      const bodyText = await res.text().catch(() => "");
 
-      if (!listRes.ok) {
-        let msg = `Graph API ${listRes.status}`;
-        try {
-          const errBody = JSON.parse(bodyText) as { error?: { message?: string } };
-          msg = errBody?.error?.message ?? msg;
-        } catch {
-          if (bodyText) msg = bodyText.substring(0, 200);
-        }
+      if (!res.ok) {
+        let msg = `Graph API ${res.status}`;
+        try { msg = (JSON.parse(bodyText) as { error?: { message?: string } })?.error?.message ?? msg; }
+        catch { if (bodyText) msg = bodyText.substring(0, 200); }
+        return NextResponse.json({ error: `OneDrive list failed: ${msg}` }, { status: 502 });
+      }
+
+      let page: { value?: DriveItem[]; "@odata.nextLink"?: string };
+      try { page = JSON.parse(bodyText); }
+      catch {
         return NextResponse.json(
-          { error: `OneDrive list failed: ${msg}` },
+          { error: `Unexpected OneDrive response: ${bodyText.substring(0, 120)}` },
           { status: 502 }
         );
       }
 
-      let listData: { value?: DriveItem[]; "@odata.nextLink"?: string };
-      try {
-        listData = JSON.parse(bodyText);
-      } catch {
-        const preview = bodyText.substring(0, 120).replace(/\s+/g, " ");
-        return NextResponse.json(
-          { error: `OneDrive returned an unexpected response: ${preview}` },
-          { status: 502 }
-        );
-      }
-
-      allItems.push(...(listData.value ?? []));
-      nextUrl = listData["@odata.nextLink"] ?? null;
+      allItems.push(...(page.value ?? []));
+      nextUrl = page["@odata.nextLink"] ?? null;
     }
 
-    const files = allItems.filter((item) => item.file !== undefined);
-    const cvFiles = files.filter((f) => {
-      const name = f.name.toLowerCase();
-      return name.endsWith(".pdf") || name.endsWith(".docx") || name.endsWith(".doc");
+    const cvFiles = allItems.filter((f) => {
+      if (!f.file) return false;
+      const n = f.name.toLowerCase();
+      return n.endsWith(".pdf") || n.endsWith(".docx") || n.endsWith(".doc");
     });
 
-    if (cvFiles.length === 0) {
-      return NextResponse.json({
-        candidates: [],
-        count: 0,
-        batchProcessed: 0,
-        batchAttempted: [],
-        totalFiles: 0,
-        remainingFiles: 0,
-        done: true,
-        message: `No PDF or DOCX files found in ${folderPath}`,
-      });
-    }
-
-    // ── Determine which files still need processing ───────────────────────────
+    // ── Determine pending files ───────────────────────────────────────────────
     const [existingIndexRecord, indexedFileIds] = await Promise.all([
       kv.get<Record<string, CVCandidate>>("cv:index"),
       kv.get<string[]>("cv:indexed-file-ids"),
     ]);
     const existingIndex = existingIndexRecord ?? {};
-    const indexedFileIdSet = new Set<string>(indexedFileIds ?? []);
+    const indexedSet = new Set<string>(indexedFileIds ?? []);
 
-    const pendingFiles = cvFiles.filter((f) => !indexedFileIdSet.has(f.id));
+    const pending = cvFiles.filter((f) => !indexedSet.has(f.id));
 
-    if (pendingFiles.length === 0) {
+    if (pending.length === 0) {
       return NextResponse.json({
-        candidates: Object.values(existingIndex),
         count: Object.keys(existingIndex).length,
         batchProcessed: 0,
-        batchAttempted: [],
-        totalFiles: cvFiles.length,
         remainingFiles: 0,
         done: true,
       });
     }
 
-    const batch = pendingFiles.slice(0, BATCH_SIZE);
-    const remainingAfterBatch = pendingFiles.length - batch.length;
+    const batch = pending.slice(0, BATCH_SIZE);
+    const remainingFiles = pending.length - batch.length;
 
-    // ── Process each file in the batch ────────────────────────────────────────
+    // ── Create stub candidates from filenames only ────────────────────────────
     const now = new Date().toISOString();
-    const newCandidates: CVCandidate[] = [];
-    const processedFileIds: string[] = [];
+    const newCandidates: CVCandidate[] = batch.map((file) => ({
+      id: uuidv4(),
+      name: file.name.replace(/\.[^.]+$/, ""),
+      currentRole: "",
+      currentEmployer: "",
+      yearsExperience: 0,
+      skills: [],
+      sectorExperience: [],
+      location: "",
+      seniority: "mid",
+      fileName: file.name,
+      fileModifiedAt: "",
+      indexedAt: now,
+      enriched: false,
+    }));
 
-    for (const file of batch) {
-      try {
-        const downloadRes = await graphFetch(
-          `https://graph.microsoft.com/v1.0/me/drive/items/${file.id}/content`,
-          accessToken
-        );
-        if (!downloadRes.ok) {
-          console.warn(`[cv/index] download failed for ${file.name}: HTTP ${downloadRes.status}`);
-          const fallbackName = file.name.replace(/\.[^.]+$/, "");
-          newCandidates.push({
-            id: uuidv4(),
-            name: fallbackName,
-            currentRole: "",
-            currentEmployer: "",
-            yearsExperience: 0,
-            skills: [],
-            sectorExperience: [],
-            location: "",
-            seniority: "mid",
-            fileName: file.name,
-            fileModifiedAt: file.lastModifiedDateTime ?? "",
-            indexedAt: now,
-            downloadFailed: true,
-          });
-          processedFileIds.push(file.id);
-          continue;
-        }
+    // ── Persist ───────────────────────────────────────────────────────────────
+    const mergedIndex = { ...existingIndex };
+    for (const c of newCandidates) mergedIndex[c.id] = c;
+    const updatedFileIds = [...indexedSet, ...batch.map((f) => f.id)];
 
-        const buffer = Buffer.from(await downloadRes.arrayBuffer());
-        let text = "";
-
-        if (file.name.toLowerCase().endsWith(".pdf")) {
-          const pdfParse = (await import("pdf-parse")).default;
-          const parsed = await pdfParse(buffer);
-          text = parsed.text;
-        } else {
-          const mammoth = await import("mammoth");
-          const result = await mammoth.extractRawText({ buffer });
-          text = result.value;
-        }
-
-        if (!text.trim()) continue;
-
-        const truncated = text.trim().substring(0, 3000);
-
-        let extracted: Partial<CVCandidate> = {};
-        try {
-          const extractRes = await Promise.race([
-            anthropic.messages.create({
-              model: "claude-haiku-4-5-20251001",
-              max_tokens: 600,
-              messages: [
-                {
-                  role: "user",
-                  content: `Extract candidate info from this CV. Return JSON only:
-{"name":"...", "currentRole":"...", "currentEmployer":"...", "yearsExperience":5, "skills":["TypeScript","React"], "sectorExperience":["fintech","healthtech"], "location":"Sydney, Australia", "seniority":"senior"}
-
-currentEmployer: the name of the company where they currently work or most recently worked.
-seniority options: "junior" (0-2yr), "mid" (2-5yr), "senior" (5-10yr), "lead" (team lead), "principal" (staff+)
-
-CV text:
-${truncated}
-
-Return ONLY the JSON object.`,
-                },
-              ],
-            }),
-            new Promise<never>((_, reject) =>
-              setTimeout(() => reject(new Error("Claude extraction timed out")), CLAUDE_TIMEOUT_MS)
-            ),
-          ]);
-          const raw =
-            extractRes.content[0].type === "text"
-              ? extractRes.content[0].text.trim()
-              : "{}";
-          const clean = raw.replace(/^```(?:json)?\n?/, "").replace(/\n?```$/, "");
-          try {
-            extracted = JSON.parse(clean);
-          } catch {
-            extracted = {};
-          }
-        } catch (extractErr) {
-          console.warn(`[cv/index] Claude extraction failed for ${file.name}: ${extractErr instanceof Error ? extractErr.message : extractErr}`);
-        }
-
-        const fallbackName = file.name.replace(/\.[^.]+$/, "");
-        newCandidates.push({
-          id: uuidv4(),
-          name: extracted.name ?? fallbackName,
-          currentRole: extracted.currentRole ?? "",
-          currentEmployer: extracted.currentEmployer ?? "",
-          yearsExperience: extracted.yearsExperience ?? 0,
-          skills: extracted.skills ?? [],
-          sectorExperience: extracted.sectorExperience ?? [],
-          location: extracted.location ?? "",
-          seniority: extracted.seniority ?? "mid",
-          fileName: file.name,
-          fileModifiedAt: file.lastModifiedDateTime ?? "",
-          indexedAt: now,
-        });
-        processedFileIds.push(file.id);
-      } catch (fileErr) {
-        if (fileErr instanceof GraphAuthError) throw fileErr; // bubble up
-        console.error(`Error processing ${file.name}:`, fileErr);
-      }
+    try {
+      await Promise.all([
+        kv.set("cv:index", mergedIndex),
+        kv.set("cv:indexed-file-ids", updatedFileIds),
+      ]);
+    } catch (kvErr) {
+      console.error("[cv/index] KV write failed:", kvErr);
+      throw kvErr;
     }
 
-    console.log(`[cv/index] batch attempted: ${batch.length}, extracted by Claude: ${newCandidates.filter(c => c.name !== c.fileName.replace(/\.[^.]+$/, "")).length}, total indexed this batch: ${newCandidates.length}`);
+    const count = Object.keys(mergedIndex).length;
+    console.log(`[cv/index] indexed ${batch.length} stubs, total=${count}, remaining=${remainingFiles}`);
 
-    // ── Merge into existing index and persist ─────────────────────────────────
-    const mergedIndexRecord = { ...existingIndex };
-    for (const candidate of newCandidates) {
-      mergedIndexRecord[candidate.id] = candidate;
-    }
-    const updatedFileIds = [...indexedFileIdSet, ...processedFileIds];
-    await Promise.all([
-      kv.set("cv:index", mergedIndexRecord),
-      kv.set("cv:indexed-file-ids", updatedFileIds),
-    ]);
-
-    const mergedCandidates = Object.values(mergedIndexRecord);
     return NextResponse.json({
-      candidates: mergedCandidates,
-      count: mergedCandidates.length,
-      batchProcessed: newCandidates.length,
-      batchAttempted: batch.map((f) => f.name),
-      totalFiles: cvFiles.length,
-      remainingFiles: remainingAfterBatch,
-      done: remainingAfterBatch === 0,
+      count,
+      batchProcessed: batch.length,
+      remainingFiles,
+      done: remainingFiles === 0,
     });
   } catch (err) {
-    console.error("cv/index POST error:", err);
-    if (err instanceof GraphAuthError) {
-      return NextResponse.json(
-        { error: "Microsoft session expired. Please reconnect.", tokenExpired: true },
-        { status: 401 }
-      );
-    }
+    console.error("[cv/index] POST error:", err);
     return NextResponse.json(
       { error: err instanceof Error ? err.message : "Indexing failed" },
       { status: 500 }

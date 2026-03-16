@@ -15,6 +15,7 @@ export interface CVCandidate {
   fileModifiedAt?: string;
   indexedAt: string;
   downloadFailed?: boolean;
+  enriched?: boolean;
 }
 
 export interface CVMatch {
