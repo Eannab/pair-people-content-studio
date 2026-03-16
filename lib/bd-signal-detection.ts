@@ -37,7 +37,7 @@ async function extractCompanies(articles: ScoredArticle[]): Promise<ExtractedCom
   const articleText = articles
     .map(
       (a, i) =>
-        `${i + 1}. [${a.topSector.toUpperCase()}] "${a.title}" (${a.source})\n   ${a.summary}`
+        `${i + 1}. [${a.sector.toUpperCase()}] "${a.title}" (${a.source})\n   ${a.summary}`
     )
     .join("\n\n");
 
@@ -146,24 +146,27 @@ ${c.research ? c.research.substring(0, 900) : "No search results found."}`
     messages: [
       {
         role: "user",
-        content: `You are a BD intelligence analyst for Pair People, a Sydney tech recruitment agency placing engineers and tech leaders in Australian startups and scale-ups.
+        content: `You are a BD intelligence analyst for Pair People, a Sydney tech recruitment agency placing engineers and tech leaders in Australian startups and scaleups.
 
 For each company below you have: the article signal AND web research about the company's actual size and location.
 
-CLASSIFICATION RULES — apply in strict order:
+DEFAULT TO INCLUDING. We want false positives — not false negatives. Only exclude a company when you have clear, specific evidence it fails both of the gates below.
 
-STEP 1 — SIZE GATE (hard block, no exceptions):
-If research confirms the company has 200 or more employees → classify as marketInsight. Full stop.
-This applies even if they have an AU office or are actively hiring in Australia.
-Examples that must always be marketInsight: Anthropic (~1,000+ employees), Meta (100,000+), xAI (hundreds), any company described as "large", "enterprise", "global", or with 200+ staff confirmed.
+CLASSIFICATION RULES:
 
-STEP 2 — AU GATE (only for companies that passed Step 1):
-The company must be PRIMARILY Australian-based (HQ or main operations in AU) OR be a startup/scale-up with a dedicated AU office or a role that is specifically located in Australia (not just "remote-friendly globally").
-Remote roles that any global company posts worldwide do NOT count as AU presence.
+STEP 1 — SIZE GATE:
+Only exclude if research CLEARLY confirms the company has 500 or more employees. Under 500, include as bdLead.
+If research is ambiguous, inconclusive, or not found — include as bdLead.
+Do NOT exclude based on Claude's training knowledge alone. Only exclude when web research explicitly confirms 500+ staff.
+
+STEP 2 — AU GATE (only applies to companies that clearly failed the size gate):
+Include if the company: is headquartered in Australia, has an Australian office, is actively expanding into AU/NZ/APAC, has AU-based hiring, or has any partnership or deal with an Australian company.
+Remote-friendly global roles count — any AU connection counts.
+If AU connection is unclear from research — include as bdLead.
 
 STEP 3 — INCONCLUSIVE RESEARCH:
-If research returns no results and the company is genuinely unknown, classify as bdLead — it is better to investigate a false positive than miss a real opportunity.
-But: if a company is clearly recognisable as a large global player from the article context alone (e.g. well-known US tech giant), classify as marketInsight even without confirming research.
+No search results found? → include as bdLead. Unknown companies are often exactly the startups we want.
+Company is clearly a household-name global giant from article context (e.g. Apple, Meta, Google)? → marketInsight even without research.
 
 Companies:
 ${companyBlocks}
@@ -172,29 +175,27 @@ Return a single JSON object:
 {
   "bdLeads": [{
     "companyName": "...",
-    "sector": "ai",
+    "sector": "free-form label e.g. cleantech, legaltech, fintech, defence, AI, healthtech, saas, etc",
     "signals": [{"type": "funded", "label": "Series A", "context": "...", "articleTitle": "...", "articleSource": "..."}],
     "australiaPresence": {
       "basedInAustralia": true,
       "hiringInAustralia": true,
-      "detail": "Evidence from research: Sydney HQ per LinkedIn"
+      "detail": "Evidence from research or 'Inconclusive — included by default'"
     },
     "initialRelevanceScore": 8,
-    "researchSummary": "1-2 sentences on what research revealed about size and AU presence"
+    "researchSummary": "1-2 sentences on what research revealed, or 'No results found — included by default'"
   }],
   "marketInsights": [{
     "companyName": "...",
-    "sector": "ai",
+    "sector": "...",
     "signals": [...],
-    "whyExcluded": "Research confirms: [specific evidence — e.g. '~1,000 employees per LinkedIn', 'US HQ, no AU office, remote-only posting']"
+    "whyExcluded": "Specific evidence: [e.g. '~2,000 employees per LinkedIn, US HQ, no AU presence found']"
   }]
 }
 
 Additional rules:
-- whyExcluded must cite specific evidence from the research, never Claude's training assumptions alone
-- For the size gate: if research shows a range, use the lower bound. If 200+ is plausible, exclude.
-- sector: "defence" | "ai" | "healthtech" | "sydney" | "general"
 - signal type: "funded" | "hiring" | "launch"
+- whyExcluded must cite specific research evidence — not assumptions
 - Return ONLY the JSON object — no markdown fences, no preamble.`,
       },
     ],

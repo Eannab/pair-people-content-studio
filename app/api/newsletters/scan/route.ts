@@ -18,8 +18,7 @@ export interface ScoredArticle {
   receivedDate: string;
   webLink: string;
   topScore: number;
-  topSector: "defence" | "ai" | "healthtech" | "sydney" | "general";
-  scores: { defence: number; ai: number; healthtech: number; sydney: number };
+  sector: string;
   relevanceSummary: string;
 }
 
@@ -178,23 +177,29 @@ async function scoreArticles(
     messages: [
       {
         role: "user",
-        content: `Score these ${articles.length} articles 1–10 for relevance to Pair People, a Sydney-based tech recruitment agency.
+        content: `Score these ${articles.length} articles 1–10 for relevance to Pair People, a Sydney-based tech recruitment agency that places developers, engineers, data scientists, and technical leaders into Australian startups and scaleups.
 
-Score against these four sectors:
-- "defence": Defence & Deep Tech (defence tech startups, dual-use technology, deep tech R&D)
-- "ai": AI / ML Engineering (AI products, ML infrastructure, LLMs, engineering hiring)
-- "healthtech": Healthtech / Medtech (digital health, medical devices, health tech market)
-- "sydney": Sydney Startup Market (Sydney ecosystem, local funding, hiring trends, tech sector news)
+Score HIGH (7-10) if the article mentions ANY company that:
+- Is Australian or expanding into Australia/NZ
+- Has or likely needs a tech team
+- Is under ~200 employees
+- Shows any growth signal: funding, hiring, scaling, launching, expanding, acquiring, partnering
+
+Score LOW (1-3) ONLY if:
+- The company is clearly a large enterprise (1000+ employees, ASX100, Fortune 500)
+- The company is overseas with zero Australian connection
+- The article has no specific company mentioned at all
+
+When in doubt, score HIGH. We would rather see too many leads than miss good ones. If a company is mentioned and it could plausibly be a startup or scaleup with tech needs, give it a 7+.
 
 Articles:
 ${listText}
 
-Return a JSON array with one object per article (same order as input):
+For each article return a JSON array (same order as input):
 [{
   "topScore": 8,
-  "topSector": "ai",
-  "scores": {"defence": 2, "ai": 8, "healthtech": 1, "sydney": 5},
-  "relevanceSummary": "one sentence on why this is relevant to Pair People"
+  "sector": "short label e.g. cleantech, legaltech, fintech, defence, AI, healthtech, saas, logistics, proptech, etc",
+  "relevanceSummary": "one sentence on why this company matters to a tech recruiter"
 }]
 
 Return ONLY the JSON array — no markdown fences, no preamble.`,
@@ -208,19 +213,17 @@ Return ONLY the JSON array — no markdown fences, no preamble.`,
 
   let scored: Array<{
     topScore: number;
-    topSector: string;
-    scores: { defence: number; ai: number; healthtech: number; sydney: number };
+    sector: string;
     relevanceSummary: string;
   }> = [];
 
   try {
     scored = JSON.parse(clean);
   } catch {
-    // Fallback: give every article a neutral score
+    // Fallback: give every article a passing score
     scored = articles.map(() => ({
-      topScore: 5,
-      topSector: "general",
-      scores: { defence: 5, ai: 5, healthtech: 5, sydney: 5 },
+      topScore: 7,
+      sector: "general",
       relevanceSummary: "",
     }));
   }
@@ -228,9 +231,8 @@ Return ONLY the JSON array — no markdown fences, no preamble.`,
   return articles.map((article, i) => ({
     id: `${article.emailId}-${i}`,
     ...article,
-    topScore: scored[i]?.topScore ?? 5,
-    topSector: (scored[i]?.topSector as ScoredArticle["topSector"]) ?? "general",
-    scores: scored[i]?.scores ?? { defence: 5, ai: 5, healthtech: 5, sydney: 5 },
+    topScore: scored[i]?.topScore ?? 7,
+    sector: scored[i]?.sector ?? "general",
     relevanceSummary: scored[i]?.relevanceSummary ?? "",
   }));
 }

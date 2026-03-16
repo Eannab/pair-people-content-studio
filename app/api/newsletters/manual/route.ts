@@ -125,14 +125,26 @@ export async function POST(request: NextRequest) {
       messages: [
         {
           role: "user",
-          content: `Score these articles 1-10 for relevance to Pair People, a Sydney tech recruitment agency.
-Sectors: "defence" (Defence/DeepTech), "ai" (AI/ML), "healthtech" (Healthtech), "sydney" (Sydney Market), "general".
+          content: `Score these ${extracted.length} articles 1-10 for relevance to Pair People, a Sydney tech recruitment agency that places developers, engineers, data scientists, and technical leaders into Australian startups and scaleups.
+
+Score HIGH (7-10) if the article mentions ANY company that:
+- Is Australian or expanding into Australia/NZ
+- Has or likely needs a tech team
+- Is under ~200 employees
+- Shows any growth signal: funding, hiring, scaling, launching, expanding, acquiring, partnering
+
+Score LOW (1-3) ONLY if:
+- The company is clearly a large enterprise (1000+ employees, ASX100, Fortune 500)
+- The company is overseas with zero Australian connection
+- The article has no specific company mentioned at all
+
+When in doubt, score HIGH. We would rather see too many leads than miss good ones.
 
 Articles:
 ${listText}
 
 Return a JSON array (same order):
-[{"topScore": 8, "topSector": "ai", "scores": {"defence": 2, "ai": 8, "healthtech": 1, "sydney": 5}, "relevanceSummary": "one sentence"}]
+[{"topScore": 8, "sector": "short label e.g. cleantech, legaltech, fintech, defence, AI, healthtech, saas, etc", "relevanceSummary": "one sentence"}]
 Return ONLY the JSON array.`,
         },
       ],
@@ -144,8 +156,7 @@ Return ONLY the JSON array.`,
 
     let scored: Array<{
       topScore: number;
-      topSector: string;
-      scores: { defence: number; ai: number; healthtech: number; sydney: number };
+      sector: string;
       relevanceSummary: string;
     }> = [];
     try {
@@ -161,9 +172,8 @@ Return ONLY the JSON array.`,
       source,
       receivedDate: now,
       webLink: url?.trim() || "",
-      topScore: scored[i]?.topScore ?? 5,
-      topSector: (scored[i]?.topSector as ScoredArticle["topSector"]) ?? "general",
-      scores: scored[i]?.scores ?? { defence: 5, ai: 5, healthtech: 5, sydney: 5 },
+      topScore: scored[i]?.topScore ?? 7,
+      sector: scored[i]?.sector ?? "general",
       relevanceSummary: scored[i]?.relevanceSummary ?? "",
     }));
 
