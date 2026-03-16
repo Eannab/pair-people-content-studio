@@ -10,11 +10,6 @@ export const maxDuration = 60;
 const BATCH_SIZE = 2;
 const FILE_TIMEOUT_MS = 25_000;
 
-const MEDIA_TYPES: Record<string, string> = {
-  ".pdf": "application/pdf",
-  ".docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-  ".doc": "application/msword",
-};
 
 // GET — return enrichment stats
 export async function GET() {
@@ -68,6 +63,14 @@ export async function POST() {
       }, FILE_TIMEOUT_MS);
 
       try {
+        // ── Skip non-PDF files — Anthropic only supports PDF as document type ─
+        const ext = candidate.fileName.toLowerCase().match(/\.[^.]+$/)?.[0] ?? "";
+        if (ext !== ".pdf") {
+          console.log(`[cv/enrich] skipping ${candidate.fileName} (${ext} not supported)`);
+          indexRecord[candidate.id] = { ...candidate, enriched: true, enrichmentSkipped: true };
+          continue;
+        }
+
         // ── Download file from OneDrive ───────────────────────────────────────
         const encodedName = encodeURIComponent(candidate.fileName).replace(/'/g, "%27");
         const downloadRes = await graphFetch(
@@ -87,9 +90,6 @@ export async function POST() {
         const buffer = Buffer.from(await downloadRes.arrayBuffer());
         const base64 = buffer.toString("base64");
 
-        const ext = candidate.fileName.toLowerCase().match(/\.[^.]+$/)?.[0] ?? ".pdf";
-        const mediaType = MEDIA_TYPES[ext] ?? "application/pdf";
-
         // ── Call Claude with native document reading ──────────────────────────
         const claudeRes = await fetch("https://api.anthropic.com/v1/messages", {
           signal: controller.signal,
@@ -108,7 +108,7 @@ export async function POST() {
                 content: [
                   {
                     type: "document",
-                    source: { type: "base64", media_type: mediaType, data: base64 },
+                    source: { type: "base64", media_type: "application/pdf", data: base64 },
                   },
                   {
                     type: "text",
@@ -122,8 +122,9 @@ export async function POST() {
 
         if (!claudeRes.ok) {
           const claudeErr = await claudeRes.text().catch(() => "");
-          console.warn(`[cv/enrich] Claude failed for ${candidate.fileName}: ${claudeRes.status} ${claudeErr.substring(0, 200)}`);
-          indexRecord[candidate.id] = { ...candidate, enriched: true, downloadFailed: true };
+          const reason = `Claude ${claudeRes.status}: ${claudeErr.substring(0, 150)}`;
+          console.warn(`[cv/enrich] Claude failed for ${candidate.fileName}: ${reason}`);
+          indexRecord[candidate.id] = { ...candidate, enriched: true, enrichmentError: `failed: ${reason}` };
           continue;
         }
 
@@ -158,9 +159,9 @@ export async function POST() {
         if (candidateErr instanceof Error && candidateErr.name === "AbortError") {
           // Timed out — leave enriched: false so it's retried next batch
         } else {
-          console.error(`[cv/enrich] unexpected error for ${candidate.fileName}:`, candidateErr);
-          // Mark done so we don't retry indefinitely on hard failures
-          indexRecord[candidate.id] = { ...candidate, enriched: true, downloadFailed: true };
+          const msg = candidateErr instanceof Error ? candidateErr.message : String(candidateErr);
+          console.error(`[cv/enrich] unexpected error for ${candidate.fileName}:`, msg);
+          indexRecord[candidate.id] = { ...candidate, enriched: true, enrichmentError: `failed: ${msg}` };
         }
       } finally {
         clearTimeout(timer);

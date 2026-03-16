@@ -16,6 +16,8 @@ export interface CVCandidate {
   indexedAt: string;
   downloadFailed?: boolean;
   enriched?: boolean;
+  enrichmentSkipped?: boolean;
+  enrichmentError?: string;
 }
 
 export interface CVMatch {
