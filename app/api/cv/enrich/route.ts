@@ -68,6 +68,7 @@ export async function POST() {
         if (ext !== ".pdf") {
           console.log(`[cv/enrich] skipping ${candidate.fileName} (${ext} not supported)`);
           indexRecord[candidate.id] = { ...candidate, enriched: true, enrichmentSkipped: true };
+          await kv.set("cv:index", indexRecord);
           continue;
         }
 
@@ -84,6 +85,7 @@ export async function POST() {
           console.warn(`[cv/enrich] download failed for ${candidate.fileName}: ${downloadRes.status} ${errBody.substring(0, 200)}`);
           // Mark as enriched=true with downloadFailed so it's not retried
           indexRecord[candidate.id] = { ...candidate, enriched: true, downloadFailed: true };
+          await kv.set("cv:index", indexRecord);
           continue;
         }
 
@@ -125,6 +127,7 @@ export async function POST() {
           const reason = `Claude ${claudeRes.status}: ${claudeErr.substring(0, 150)}`;
           console.warn(`[cv/enrich] Claude failed for ${candidate.fileName}: ${reason}`);
           indexRecord[candidate.id] = { ...candidate, enriched: true, enrichmentError: `failed: ${reason}` };
+          await kv.set("cv:index", indexRecord);
           continue;
         }
 
