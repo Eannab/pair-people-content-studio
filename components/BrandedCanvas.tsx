@@ -2,7 +2,7 @@
 
 import React, { useRef, useEffect, useCallback, useState } from "react";
 
-export type CardType = "pull-quote" | "role-badge" | "stat-card";
+export type CardType = "pull-quote" | "role-badge";
 
 export interface PullQuoteData {
   quote: string;
@@ -10,16 +10,11 @@ export interface PullQuoteData {
   attributionTitle: string;
 }
 export interface RoleBadgeData {
-  candidateName: string;
-  roleType: string;
+  title: string;    // e.g. "Senior Full Stack Engineer"
+  location: string; // e.g. "Sydney, Australia"
   techStack: string; // comma-separated
 }
-export interface StatCardData {
-  stat: string;
-  headline: string;
-  copy: string;
-}
-export type CardData = PullQuoteData | RoleBadgeData | StatCardData;
+export type CardData = PullQuoteData | RoleBadgeData;
 
 interface Props {
   type: CardType;
@@ -182,150 +177,170 @@ function drawRoleBadge(
   drawWatermark(ctx, logo);
 
   const cx = W / 2;
+  const HMARGIN = 80;
 
-  // Top accent line
-  ctx.fillStyle = GREEN;
-  ctx.fillRect(cx - 40, 60, 80, 5);
+  // ── Measure title ──────────────────────────────────────────────────────────
+  ctx.font = `600 60px Poppins, sans-serif`;
+  const titleText = data.title || "Senior Full Stack Engineer";
+  const titleLines = wrapText(ctx, titleText, W - HMARGIN * 2);
+  const TITLE_LH = 74;
+  const titleBlockH = titleLines.length * TITLE_LH;
 
-  // Candidate name
-  ctx.save();
-  ctx.font = `600 72px Poppins, sans-serif`;
-  ctx.fillStyle = data.candidateName ? WHITE : `${WHITE}44`;
-  ctx.textAlign = "center";
-  ctx.textBaseline = "alphabetic";
-  ctx.fillText(data.candidateName || "Candidate Name", cx, 230);
-  ctx.restore();
-
-  // Role type
-  ctx.save();
-  ctx.font = `600 36px Poppins, sans-serif`;
-  ctx.fillStyle = GREEN;
-  ctx.textAlign = "center";
-  ctx.textBaseline = "alphabetic";
-  ctx.fillText(data.roleType || "Role Type", cx, 290);
-  ctx.restore();
-
-  // Divider
-  ctx.save();
-  ctx.strokeStyle = `${LIGHT_BLUE}44`;
-  ctx.lineWidth = 1;
-  ctx.beginPath();
-  ctx.moveTo(cx - 120, 315);
-  ctx.lineTo(cx + 120, 315);
-  ctx.stroke();
-  ctx.restore();
-
-  // Tech pills
+  // ── Measure pills ──────────────────────────────────────────────────────────
   const techs = data.techStack
     ? data.techStack.split(",").map((t) => t.trim()).filter(Boolean)
     : [];
 
-  if (techs.length > 0) {
-    ctx.save();
-    ctx.font = `normal 22px AlteHaasGrotesk, sans-serif`;
-    const pillPadX = 22;
-    const pillPadY = 11;
-    const pillH = 22 + pillPadY * 2;
-    const gap = 14;
+  const PILL_PAD_X = 22;
+  const PILL_PAD_Y = 11;
+  const PILL_H = 22 + PILL_PAD_Y * 2; // 44px
+  const PILL_GAP = 14;
+  const PILL_ROW_GAP = 12;
 
-    const widths = techs.map((t) => ctx.measureText(t).width + pillPadX * 2);
-    const totalW = widths.reduce((a, b) => a + b, 0) + gap * (techs.length - 1);
-    let px = cx - totalW / 2;
-    const py = 345;
+  let pillWidths: number[] = [];
+  let pillRows: number[][] = [];
+
+  if (techs.length > 0) {
+    ctx.font = `normal 22px AlteHaasGrotesk, sans-serif`;
+    pillWidths = techs.map((t) => ctx.measureText(t).width + PILL_PAD_X * 2);
+
+    const maxRowW = W - HMARGIN * 2;
+    let rowItems: number[] = [];
+    let rowW = 0;
 
     for (let i = 0; i < techs.length; i++) {
-      const pw = widths[i];
-
-      ctx.globalAlpha = 0.25;
-      ctx.fillStyle = LIGHT_BLUE;
-      roundRect(ctx, px, py, pw, pillH, pillH / 2);
-      ctx.fill();
-
-      ctx.globalAlpha = 0.4;
-      ctx.strokeStyle = LIGHT_BLUE;
-      ctx.lineWidth = 1;
-      roundRect(ctx, px, py, pw, pillH, pillH / 2);
-      ctx.stroke();
-
-      ctx.globalAlpha = 1;
-      ctx.fillStyle = WHITE;
-      ctx.textAlign = "center";
-      ctx.textBaseline = "middle";
-      ctx.fillText(techs[i], px + pw / 2, py + pillH / 2);
-
-      px += pw + gap;
+      const pw = pillWidths[i];
+      if (rowItems.length > 0 && rowW + PILL_GAP + pw > maxRowW) {
+        pillRows.push(rowItems);
+        rowItems = [i];
+        rowW = pw;
+      } else {
+        rowItems.push(i);
+        rowW = rowItems.length === 1 ? pw : rowW + PILL_GAP + pw;
+      }
     }
-    ctx.restore();
+    if (rowItems.length > 0) pillRows.push(rowItems);
   }
 
-  drawLogo(ctx);
-}
+  const pillBlockH =
+    pillRows.length > 0
+      ? pillRows.length * PILL_H + (pillRows.length - 1) * PILL_ROW_GAP
+      : 0;
 
-// ── Stat Card ─────────────────────────────────────────────────────────────────
+  // ── Total content height & start Y ────────────────────────────────────────
+  const hasLocation = !!data.location;
+  const hasPills = pillRows.length > 0;
+  const LOCATION_H = 36;
+  const GAP_TITLE_LOC = 14;
+  const GAP_LOC_DIV = 18;
+  const GAP_TITLE_DIV = 14;
+  const GAP_DIV_PILLS = 20;
 
-function drawStatCard(
-  ctx: CanvasRenderingContext2D,
-  data: StatCardData,
-  logo: HTMLImageElement | null
-) {
-  ctx.fillStyle = NAVY;
-  ctx.fillRect(0, 0, W, H);
-  drawWatermark(ctx, logo);
+  const totalH =
+    titleBlockH +
+    (hasLocation ? GAP_TITLE_LOC + LOCATION_H : 0) +
+    (hasPills
+      ? (hasLocation ? GAP_LOC_DIV : GAP_TITLE_DIV) + 1 + GAP_DIV_PILLS + pillBlockH
+      : 0);
 
-  const cx = W / 2;
+  const startY = Math.round((H - totalH) / 2);
 
-  // Large stat
-  ctx.save();
-  ctx.font = `600 140px Poppins, sans-serif`;
-  ctx.fillStyle = data.stat ? GREEN : `${GREEN}44`;
-  ctx.textAlign = "center";
-  ctx.textBaseline = "alphabetic";
-  ctx.fillText(data.stat || "00%", cx, 290);
-  ctx.restore();
-
-  // Underline accent
-  ctx.save();
-  ctx.font = `600 140px Poppins, sans-serif`;
-  const statWidth = ctx.measureText(data.stat || "00%").width;
-  const lineW = Math.min(statWidth + 20, 400);
+  // ── Top accent line ────────────────────────────────────────────────────────
   ctx.fillStyle = GREEN;
-  ctx.globalAlpha = 0.3;
-  ctx.fillRect(cx - lineW / 2, 300, lineW, 4);
+  ctx.fillRect(cx - 40, Math.max(40, startY - 28), 80, 4);
+
+  // ── Title ─────────────────────────────────────────────────────────────────
+  ctx.save();
+  ctx.font = `600 60px Poppins, sans-serif`;
+  ctx.fillStyle = data.title ? WHITE : `${WHITE}44`;
+  ctx.textAlign = "center";
+  ctx.textBaseline = "top";
+  let y = startY;
+  for (const line of titleLines) {
+    ctx.fillText(line, cx, y);
+    y += TITLE_LH;
+  }
   ctx.restore();
 
-  // Compute line counts for layout
-  ctx.font = `600 38px Poppins, sans-serif`;
-  const headlineLines = data.headline ? wrapText(ctx, data.headline, W - 200) : [];
-  ctx.font = `normal 30px AlteHaasGrotesk, serif`;
-  const copyLines = data.copy ? wrapText(ctx, data.copy, W - 240) : [];
+  // ── Location ──────────────────────────────────────────────────────────────
+  if (hasLocation) {
+    y += GAP_TITLE_LOC;
 
-  let y = 322;
-
-  // Supporting headline
-  if (headlineLines.length > 0) {
+    // Small location dot before text
     ctx.save();
-    ctx.font = `600 38px Poppins, sans-serif`;
-    ctx.fillStyle = WHITE;
-    ctx.textAlign = "center";
-    ctx.textBaseline = "top";
-    for (const line of headlineLines) {
-      ctx.fillText(line, cx, y);
-      y += 52;
-    }
+    ctx.font = `normal 28px AlteHaasGrotesk, serif`;
+    const locWidth = ctx.measureText(data.location).width;
+    const dotCX = cx - locWidth / 2 - 14;
+    const dotCY = y + 14;
+    ctx.fillStyle = LIGHT_BLUE;
+    ctx.globalAlpha = 0.65;
+    ctx.beginPath();
+    ctx.arc(dotCX, dotCY, 4, 0, Math.PI * 2);
+    ctx.fill();
     ctx.restore();
-    y += 8;
-  }
 
-  // Supporting copy
-  if (copyLines.length > 0) {
+    // Location text
     ctx.save();
-    ctx.font = `normal 30px AlteHaasGrotesk, serif`;
+    ctx.font = `normal 28px AlteHaasGrotesk, serif`;
     ctx.fillStyle = LIGHT_BLUE;
     ctx.textAlign = "center";
     ctx.textBaseline = "top";
-    for (const line of copyLines) {
-      ctx.fillText(line, cx, y);
-      y += 44;
+    ctx.fillText(data.location, cx, y);
+    ctx.restore();
+
+    y += LOCATION_H;
+    y += GAP_LOC_DIV;
+  } else if (hasPills) {
+    y += GAP_TITLE_DIV;
+  }
+
+  // ── Divider ───────────────────────────────────────────────────────────────
+  if (hasPills) {
+    ctx.save();
+    ctx.strokeStyle = `${LIGHT_BLUE}44`;
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.moveTo(cx - 100, y);
+    ctx.lineTo(cx + 100, y);
+    ctx.stroke();
+    ctx.restore();
+    y += 1 + GAP_DIV_PILLS;
+  }
+
+  // ── Tech pills ────────────────────────────────────────────────────────────
+  if (hasPills) {
+    ctx.save();
+    ctx.font = `normal 22px AlteHaasGrotesk, sans-serif`;
+
+    for (const rowIdxs of pillRows) {
+      const rowW =
+        rowIdxs.reduce((s, i) => s + pillWidths[i], 0) +
+        PILL_GAP * (rowIdxs.length - 1);
+      let px = cx - rowW / 2;
+
+      for (const i of rowIdxs) {
+        const pw = pillWidths[i];
+
+        ctx.globalAlpha = 0.25;
+        ctx.fillStyle = LIGHT_BLUE;
+        roundRect(ctx, px, y, pw, PILL_H, PILL_H / 2);
+        ctx.fill();
+
+        ctx.globalAlpha = 0.4;
+        ctx.strokeStyle = LIGHT_BLUE;
+        ctx.lineWidth = 1;
+        roundRect(ctx, px, y, pw, PILL_H, PILL_H / 2);
+        ctx.stroke();
+
+        ctx.globalAlpha = 1;
+        ctx.fillStyle = WHITE;
+        ctx.textAlign = "center";
+        ctx.textBaseline = "middle";
+        ctx.fillText(techs[i], px + pw / 2, y + PILL_H / 2);
+
+        px += pw + PILL_GAP;
+      }
+      y += PILL_H + PILL_ROW_GAP;
     }
     ctx.restore();
   }
@@ -431,35 +446,28 @@ function TextArea({
 // ── Main component ────────────────────────────────────────────────────────────
 
 export default function BrandedCanvas({ type }: Props) {
-  // Per-template field state
   const [pullQuote, setPullQuote] = useState<PullQuoteData>({
     quote: "",
     attributionName: "",
     attributionTitle: "",
   });
   const [roleBadge, setRoleBadge] = useState<RoleBadgeData>({
-    candidateName: "",
-    roleType: "",
+    title: "",
+    location: "",
     techStack: "",
-  });
-  const [statCard, setStatCard] = useState<StatCardData>({
-    stat: "",
-    headline: "",
-    copy: "",
   });
 
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const logoRef = useRef<HTMLImageElement | null>(null);
   const [logoReady, setLogoReady] = useState(false);
 
-  // Load logo once
   useEffect(() => {
     const img = new Image();
     img.onload = () => {
       logoRef.current = img;
       setLogoReady(true);
     };
-    img.onerror = () => setLogoReady(true); // render without watermark if missing
+    img.onerror = () => setLogoReady(true);
     img.src = "/Pair%20People%20logo%20Final.gif";
   }, []);
 
@@ -472,7 +480,7 @@ export default function BrandedCanvas({ type }: Props) {
     try {
       await Promise.all([
         document.fonts.load(`normal 46px AlteHaasGrotesk`),
-        document.fonts.load(`600 72px Poppins`),
+        document.fonts.load(`600 60px Poppins`),
       ]);
     } catch {
       // continue with fallbacks
@@ -483,8 +491,7 @@ export default function BrandedCanvas({ type }: Props) {
 
     if (type === "pull-quote") drawPullQuote(ctx, pullQuote, logo);
     else if (type === "role-badge") drawRoleBadge(ctx, roleBadge, logo);
-    else if (type === "stat-card") drawStatCard(ctx, statCard, logo);
-  }, [type, pullQuote, roleBadge, statCard, logoReady]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [type, pullQuote, roleBadge, logoReady]); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
     render();
@@ -537,19 +544,19 @@ export default function BrandedCanvas({ type }: Props) {
       {type === "role-badge" && (
         <div className="space-y-3">
           <div>
-            <FieldLabel>Candidate name</FieldLabel>
+            <FieldLabel>Title</FieldLabel>
             <TextInput
-              value={roleBadge.candidateName}
-              onChange={(v) => setRoleBadge((p) => ({ ...p, candidateName: v }))}
-              placeholder="e.g. Alex Chen"
+              value={roleBadge.title}
+              onChange={(v) => setRoleBadge((p) => ({ ...p, title: v }))}
+              placeholder="e.g. Senior Full Stack Engineer"
             />
           </div>
           <div>
-            <FieldLabel>Role type</FieldLabel>
+            <FieldLabel hint="optional">Role location</FieldLabel>
             <TextInput
-              value={roleBadge.roleType}
-              onChange={(v) => setRoleBadge((p) => ({ ...p, roleType: v }))}
-              placeholder="e.g. Senior Full-Stack Engineer"
+              value={roleBadge.location}
+              onChange={(v) => setRoleBadge((p) => ({ ...p, location: v }))}
+              placeholder="e.g. Sydney, Australia"
             />
           </div>
           <div>
@@ -558,36 +565,6 @@ export default function BrandedCanvas({ type }: Props) {
               value={roleBadge.techStack}
               onChange={(v) => setRoleBadge((p) => ({ ...p, techStack: v }))}
               placeholder="e.g. React, Node.js, AWS, TypeScript"
-            />
-          </div>
-        </div>
-      )}
-
-      {type === "stat-card" && (
-        <div className="space-y-3">
-          <div>
-            <FieldLabel>Stat / number</FieldLabel>
-            <TextInput
-              value={statCard.stat}
-              onChange={(v) => setStatCard((p) => ({ ...p, stat: v }))}
-              placeholder="e.g. 3× or 247% or $180K"
-            />
-          </div>
-          <div>
-            <FieldLabel hint="optional">Supporting headline</FieldLabel>
-            <TextInput
-              value={statCard.headline}
-              onChange={(v) => setStatCard((p) => ({ ...p, headline: v }))}
-              placeholder="e.g. faster time-to-hire"
-            />
-          </div>
-          <div>
-            <FieldLabel hint="optional">Supporting copy</FieldLabel>
-            <TextArea
-              value={statCard.copy}
-              onChange={(v) => setStatCard((p) => ({ ...p, copy: v }))}
-              placeholder="e.g. with Fixed Fee recruitment — no surprises, no percentages"
-              rows={2}
             />
           </div>
         </div>

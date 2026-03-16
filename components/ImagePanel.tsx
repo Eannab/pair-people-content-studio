@@ -587,8 +587,7 @@ function AIImageSection({
 
 const CARD_TYPES: { id: CardType; label: string; desc: string }[] = [
   { id: "pull-quote", label: "Pull Quote", desc: "Quote on navy with green accent" },
-  { id: "role-badge", label: "Role Badge", desc: "Candidate name, role & tech pills" },
-  { id: "stat-card", label: "Stat Card", desc: "Big number with supporting copy" },
+  { id: "role-badge", label: "Role Badge", desc: "Role title, location & tech pills" },
 ];
 
 function BrandedSection() {
@@ -607,7 +606,7 @@ function BrandedSection() {
         >
           Card Type
         </label>
-        <div className="grid grid-cols-3 gap-2">
+        <div className="grid grid-cols-2 gap-2">
           {CARD_TYPES.map(({ id, label, desc }) => {
             const active = cardType === id;
             return (
