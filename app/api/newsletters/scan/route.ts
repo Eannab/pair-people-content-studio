@@ -4,8 +4,11 @@ import { kv } from "@vercel/kv";
 import { getServerSession } from "next-auth/next";
 import { authOptions } from "@/lib/auth";
 import { graphFetch, GraphAuthError } from "@/lib/graph";
+import { detectBDSignals } from "@/lib/bd-signal-detection";
 import { DEFAULT_SENDERS } from "../senders/route";
 import type { NewsletterSender } from "../senders/route";
+import type { BDLead, MarketInsightSignal } from "@/app/api/bd/signals/route";
+import { v4 as uuidv4 } from "uuid";
 
 export interface ScoredArticle {
   id: string;
@@ -89,7 +92,7 @@ async function extractArticlesFromEmail(
   email: GraphMessage,
   bodyText: string
 ): Promise<ExtractedArticle[]> {
-  const truncated = bodyText.substring(0, 2500);
+  const truncated = bodyText.substring(0, 15000);
 
   const response = await anthropic.messages.create({
     model: "claude-haiku-4-5-20251001",
@@ -311,8 +314,9 @@ export async function POST() {
     // Sort by score descending
     scored.sort((a, b) => b.topScore - a.topScore);
 
-    // 8. Persist
+    // 8. Persist articles
     const scannedAt = new Date().toISOString();
+    const now = scannedAt;
     try {
       await kv.set("newsletters:articles", scored, {
         ex: 60 * 60 * 24 * 30, // 30-day TTL
@@ -320,11 +324,75 @@ export async function POST() {
       await kv.set("newsletters:scanned_at", scannedAt);
     } catch {}
 
+    // 9. BD signal detection on articles scoring >= 4
+    const relevantArticles = scored.filter((a) => a.topScore >= 4);
+    let leadsAdded = 0;
+    let insightsAdded = 0;
+
+    if (relevantArticles.length > 0) {
+      const { bdLeads: detectedLeads, marketInsights: detectedInsights } =
+        await detectBDSignals(relevantArticles);
+
+      // Merge BD leads
+      let existingLeads: BDLead[] = [];
+      try { existingLeads = (await kv.get<BDLead[]>("bd:leads")) ?? []; } catch {}
+      const existingLeadNames = new Set(existingLeads.map((l) => l.companyName.toLowerCase()));
+      const newLeads = detectedLeads.filter(
+        (l) => !existingLeadNames.has(l.companyName.toLowerCase())
+      );
+      if (newLeads.length > 0) {
+        try {
+          await kv.set("bd:leads", [...existingLeads, ...newLeads], { ex: 60 * 60 * 24 * 30 });
+        } catch {}
+        try {
+          const existingPipeline =
+            (await kv.get<Array<{ id: string; companyName: string }>>("bd:pipeline")) ?? [];
+          const pipelineNames = new Set(existingPipeline.map((p) => p.companyName.toLowerCase()));
+          const newPipelineEntries = newLeads
+            .filter((l) => !pipelineNames.has(l.companyName.toLowerCase()))
+            .map((l) => ({
+              id: uuidv4(),
+              companyId: l.id,
+              companyName: l.companyName,
+              sector: l.sector,
+              signals: l.signals,
+              relevanceScore: l.relevanceScore,
+              dateAdded: now,
+              status: "new" as const,
+              notes: "",
+              updatedAt: now,
+            }));
+          if (newPipelineEntries.length > 0) {
+            await kv.set("bd:pipeline", [...existingPipeline, ...newPipelineEntries]);
+          }
+        } catch {}
+        leadsAdded = newLeads.length;
+      }
+
+      // Merge market insights
+      let existingInsights: MarketInsightSignal[] = [];
+      try { existingInsights = (await kv.get<MarketInsightSignal[]>("bd:market_insights")) ?? []; } catch {}
+      const existingInsightNames = new Set(existingInsights.map((i) => i.companyName.toLowerCase()));
+      const newInsights = detectedInsights.filter(
+        (i) => !existingInsightNames.has(i.companyName.toLowerCase())
+      );
+      if (newInsights.length > 0) {
+        try {
+          await kv.set("bd:market_insights", [...existingInsights, ...newInsights], {
+            ex: 60 * 60 * 24 * 30,
+          });
+        } catch {}
+        insightsAdded = newInsights.length;
+      }
+    }
+
     return NextResponse.json({
       articles: scored,
       scannedAt,
       emailsChecked: allMessages.length,
       emailsMatched: matching.length,
+      leadsAdded,
+      insightsAdded,
     });
   } catch (err) {
     console.error("newsletters/scan error:", err);

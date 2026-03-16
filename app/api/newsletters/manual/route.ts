@@ -9,7 +9,7 @@ import type { BDLead, MarketInsightSignal } from "@/app/api/bd/signals/route";
 const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
 
 const MAX_CONTENT_LENGTH = 40_000;
-const CHUNK_SIZE = 4_000;
+const CHUNK_SIZE = 8_000;
 const CHUNK_OVERLAP = 150;
 
 /**

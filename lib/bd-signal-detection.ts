@@ -47,9 +47,17 @@ async function extractCompanies(articles: ScoredArticle[]): Promise<ExtractedCom
     messages: [
       {
         role: "user",
-        content: `Extract companies with recruitment buying signals from these articles.
-
-Only include companies with concrete, specific signals: funding announcements, active hiring, or product launches that typically precede engineering hiring.
+        content: `Extract companies with recruitment buying signals from the following newsletter content. Include companies showing ANY of these signals:
+- Funding announcements (seed, Series A/B/C, etc.)
+- Active hiring or new role postings
+- Product launches or major feature releases
+- Acquisitions or mergers
+- Expansion into new markets (especially Australia, New Zealand, APAC)
+- Scaling operations or opening new offices
+- Leadership hires (new CTO, VP Eng, etc.)
+- Revenue milestones or rapid growth indicators
+- Partnerships with Australian companies
+Only include companies that appear to be startups or scaleups (under ~200 people). Skip large enterprises.
 
 Articles:
 ${articleText}
