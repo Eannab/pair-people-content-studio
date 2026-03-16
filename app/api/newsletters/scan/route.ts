@@ -96,7 +96,7 @@ async function extractArticlesFromEmail(
 
   const response = await anthropic.messages.create({
     model: "claude-haiku-4-5-20251001",
-    max_tokens: 800,
+    max_tokens: 4000,
     messages: [
       {
         role: "user",
@@ -109,6 +109,7 @@ Date: ${email.receivedDateTime.split("T")[0]}
 Content:
 ${truncated}
 
+Extract ALL companies and articles mentioned in the newsletter. Do not stop early. If the newsletter mentions 20 companies, return all 20.
 Return a JSON array. Each item: {"title": "article headline", "summary": "2-3 sentence plain-text summary"}
 If this is a single-article newsletter, return it as one item.
 Return ONLY the JSON array — no markdown fences, no preamble.`,
@@ -124,8 +125,27 @@ Return ONLY the JSON array — no markdown fences, no preamble.`,
   try {
     articles = JSON.parse(clean);
   } catch {
-    // Extraction failed for this email — skip it
-    return [];
+    // Response was truncated mid-JSON — salvage complete objects before the break
+    const lastClosingBrace = clean.lastIndexOf("}");
+    if (lastClosingBrace !== -1) {
+      try {
+        const salvaged = clean.substring(0, lastClosingBrace + 1) + "]";
+        articles = JSON.parse(salvaged);
+        console.warn(
+          `[newsletters/scan] partial JSON salvaged for "${email.subject}" — got ${articles.length} articles`
+        );
+      } catch {
+        console.warn(
+          `[newsletters/scan] JSON parse failed entirely for "${email.subject}" — skipping`
+        );
+        return [];
+      }
+    } else {
+      console.warn(
+        `[newsletters/scan] JSON parse failed entirely for "${email.subject}" — skipping`
+      );
+      return [];
+    }
   }
 
   return articles
