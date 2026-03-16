@@ -59,7 +59,7 @@ export async function POST(request: NextRequest) {
     const encodedPath = folderPath
       .replace(/^\/+/, "")
       .split("/")
-      .map((seg) => encodeURIComponent(seg.replace(/'/g, "''")))
+      .map((seg) => encodeURIComponent(seg).replace(/'/g, "%27"))
       .join("/");
 
     type DriveItem = {
