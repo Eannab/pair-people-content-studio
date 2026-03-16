@@ -1,12 +1,7 @@
 "use client";
 
-import React, { useState, useEffect } from "react";
-import BrandedCanvas, {
-  CardType,
-  PullQuoteData,
-  RoleBadgeData,
-  StatCardData,
-} from "./BrandedCanvas";
+import React, { useState } from "react";
+import BrandedCanvas, { CardType } from "./BrandedCanvas";
 
 type ImageMode = "none" | "ai" | "branded";
 
@@ -596,40 +591,11 @@ const CARD_TYPES: { id: CardType; label: string; desc: string }[] = [
   { id: "stat-card", label: "Stat Card", desc: "Big number with supporting copy" },
 ];
 
-function BrandedSection({ content }: { content: string }) {
+function BrandedSection() {
   const [cardType, setCardType] = useState<CardType>("pull-quote");
 
-  // Pull Quote state
-  const firstParagraph = content.split("\n\n")[0]?.trim() ?? "";
-  const [quote, setQuote] = useState(
-    firstParagraph.length <= 160 ? firstParagraph : firstParagraph.substring(0, 157) + "…"
-  );
-  const [attribution, setAttribution] = useState("Eanna Barry, Pair People");
-
-  // Role Badge state
-  const [candidateName, setCandidateName] = useState("");
-  const [roleType, setRoleType] = useState("");
-  const [techStack, setTechStack] = useState("");
-
-  // Stat Card state
-  const [stat, setStat] = useState("");
-  const [copy, setCopy] = useState("");
-
-  // Reset quote when content changes
-  useEffect(() => {
-    const para = content.split("\n\n")[0]?.trim() ?? "";
-    setQuote(para.length <= 160 ? para : para.substring(0, 157) + "…");
-  }, [content]);
-
-  const cardData =
-    cardType === "pull-quote"
-      ? ({ quote, attribution } as PullQuoteData)
-      : cardType === "role-badge"
-      ? ({ candidateName, roleType, techStack } as RoleBadgeData)
-      : ({ stat, copy } as StatCardData);
-
   return (
-    <div className="space-y-5 pt-4">
+    <div className="space-y-4 pt-4">
       {/* Card type selector */}
       <div>
         <label
@@ -673,132 +639,7 @@ function BrandedSection({ content }: { content: string }) {
         </div>
       </div>
 
-      {/* Form fields — Pull Quote */}
-      {cardType === "pull-quote" && (
-        <div className="space-y-3">
-          <div>
-            <label className="block text-xs font-semibold uppercase tracking-wider mb-1.5" style={{ color: "#323B6A", fontFamily: "var(--font-poppins), Poppins, sans-serif" }}>
-              Quote
-            </label>
-            <textarea
-              value={quote}
-              onChange={(e) => setQuote(e.target.value)}
-              rows={3}
-              className="w-full px-4 py-2.5 rounded-xl text-sm outline-none resize-none"
-              style={{ border: "1.5px solid #E7EDF3", color: "#323B6A", backgroundColor: "#FFFFFF" }}
-              onFocus={(e) => { e.currentTarget.style.borderColor = "#BDCF7C"; e.currentTarget.style.boxShadow = "0 0 0 3px rgba(189,207,124,0.15)"; }}
-              onBlur={(e) => { e.currentTarget.style.borderColor = "#E7EDF3"; e.currentTarget.style.boxShadow = "none"; }}
-            />
-          </div>
-          <div>
-            <label className="block text-xs font-semibold uppercase tracking-wider mb-1.5" style={{ color: "#323B6A", fontFamily: "var(--font-poppins), Poppins, sans-serif" }}>
-              Attribution
-              <span className="ml-1.5 normal-case font-normal" style={{ color: "#A7B8D1" }}>optional</span>
-            </label>
-            <input
-              type="text"
-              value={attribution}
-              onChange={(e) => setAttribution(e.target.value)}
-              placeholder="e.g. Eanna Barry, Pair People"
-              className="w-full px-4 py-2.5 rounded-xl text-sm outline-none"
-              style={{ border: "1.5px solid #E7EDF3", color: "#323B6A", backgroundColor: "#FFFFFF" }}
-              onFocus={(e) => { e.currentTarget.style.borderColor = "#BDCF7C"; e.currentTarget.style.boxShadow = "0 0 0 3px rgba(189,207,124,0.15)"; }}
-              onBlur={(e) => { e.currentTarget.style.borderColor = "#E7EDF3"; e.currentTarget.style.boxShadow = "none"; }}
-            />
-          </div>
-        </div>
-      )}
-
-      {/* Form fields — Role Badge */}
-      {cardType === "role-badge" && (
-        <div className="space-y-3">
-          <div>
-            <label className="block text-xs font-semibold uppercase tracking-wider mb-1.5" style={{ color: "#323B6A", fontFamily: "var(--font-poppins), Poppins, sans-serif" }}>
-              Candidate name
-            </label>
-            <input
-              type="text"
-              value={candidateName}
-              onChange={(e) => setCandidateName(e.target.value)}
-              placeholder="e.g. Alex Chen"
-              className="w-full px-4 py-2.5 rounded-xl text-sm outline-none"
-              style={{ border: "1.5px solid #E7EDF3", color: "#323B6A", backgroundColor: "#FFFFFF" }}
-              onFocus={(e) => { e.currentTarget.style.borderColor = "#BDCF7C"; e.currentTarget.style.boxShadow = "0 0 0 3px rgba(189,207,124,0.15)"; }}
-              onBlur={(e) => { e.currentTarget.style.borderColor = "#E7EDF3"; e.currentTarget.style.boxShadow = "none"; }}
-            />
-          </div>
-          <div>
-            <label className="block text-xs font-semibold uppercase tracking-wider mb-1.5" style={{ color: "#323B6A", fontFamily: "var(--font-poppins), Poppins, sans-serif" }}>
-              Role type
-            </label>
-            <input
-              type="text"
-              value={roleType}
-              onChange={(e) => setRoleType(e.target.value)}
-              placeholder="e.g. Senior Full-Stack Engineer"
-              className="w-full px-4 py-2.5 rounded-xl text-sm outline-none"
-              style={{ border: "1.5px solid #E7EDF3", color: "#323B6A", backgroundColor: "#FFFFFF" }}
-              onFocus={(e) => { e.currentTarget.style.borderColor = "#BDCF7C"; e.currentTarget.style.boxShadow = "0 0 0 3px rgba(189,207,124,0.15)"; }}
-              onBlur={(e) => { e.currentTarget.style.borderColor = "#E7EDF3"; e.currentTarget.style.boxShadow = "none"; }}
-            />
-          </div>
-          <div>
-            <label className="block text-xs font-semibold uppercase tracking-wider mb-1.5" style={{ color: "#323B6A", fontFamily: "var(--font-poppins), Poppins, sans-serif" }}>
-              Tech stack
-              <span className="ml-1.5 normal-case font-normal" style={{ color: "#A7B8D1" }}>comma-separated</span>
-            </label>
-            <input
-              type="text"
-              value={techStack}
-              onChange={(e) => setTechStack(e.target.value)}
-              placeholder="e.g. React, Node.js, AWS, TypeScript"
-              className="w-full px-4 py-2.5 rounded-xl text-sm outline-none"
-              style={{ border: "1.5px solid #E7EDF3", color: "#323B6A", backgroundColor: "#FFFFFF" }}
-              onFocus={(e) => { e.currentTarget.style.borderColor = "#BDCF7C"; e.currentTarget.style.boxShadow = "0 0 0 3px rgba(189,207,124,0.15)"; }}
-              onBlur={(e) => { e.currentTarget.style.borderColor = "#E7EDF3"; e.currentTarget.style.boxShadow = "none"; }}
-            />
-          </div>
-        </div>
-      )}
-
-      {/* Form fields — Stat Card */}
-      {cardType === "stat-card" && (
-        <div className="space-y-3">
-          <div>
-            <label className="block text-xs font-semibold uppercase tracking-wider mb-1.5" style={{ color: "#323B6A", fontFamily: "var(--font-poppins), Poppins, sans-serif" }}>
-              Stat
-            </label>
-            <input
-              type="text"
-              value={stat}
-              onChange={(e) => setStat(e.target.value)}
-              placeholder="e.g. 3× or 247% or $180K"
-              className="w-full px-4 py-2.5 rounded-xl text-sm outline-none"
-              style={{ border: "1.5px solid #E7EDF3", color: "#323B6A", backgroundColor: "#FFFFFF" }}
-              onFocus={(e) => { e.currentTarget.style.borderColor = "#BDCF7C"; e.currentTarget.style.boxShadow = "0 0 0 3px rgba(189,207,124,0.15)"; }}
-              onBlur={(e) => { e.currentTarget.style.borderColor = "#E7EDF3"; e.currentTarget.style.boxShadow = "none"; }}
-            />
-          </div>
-          <div>
-            <label className="block text-xs font-semibold uppercase tracking-wider mb-1.5" style={{ color: "#323B6A", fontFamily: "var(--font-poppins), Poppins, sans-serif" }}>
-              Supporting copy
-            </label>
-            <textarea
-              value={copy}
-              onChange={(e) => setCopy(e.target.value)}
-              rows={2}
-              placeholder="e.g. faster time-to-hire with Fixed Fee recruitment"
-              className="w-full px-4 py-2.5 rounded-xl text-sm outline-none resize-none"
-              style={{ border: "1.5px solid #E7EDF3", color: "#323B6A", backgroundColor: "#FFFFFF" }}
-              onFocus={(e) => { e.currentTarget.style.borderColor = "#BDCF7C"; e.currentTarget.style.boxShadow = "0 0 0 3px rgba(189,207,124,0.15)"; }}
-              onBlur={(e) => { e.currentTarget.style.borderColor = "#E7EDF3"; e.currentTarget.style.boxShadow = "none"; }}
-            />
-          </div>
-        </div>
-      )}
-
-      {/* Canvas preview + download */}
-      <BrandedCanvas type={cardType} data={cardData} />
+      <BrandedCanvas type={cardType} />
     </div>
   );
 }
@@ -827,7 +668,7 @@ export default function ImagePanel({ content, postType }: Props) {
           {mode === "ai" && (
             <AIImageSection content={content} postType={postType} />
           )}
-          {mode === "branded" && <BrandedSection content={content} />}
+          {mode === "branded" && <BrandedSection />}
         </div>
       )}
     </div>
