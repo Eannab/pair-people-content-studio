@@ -37,6 +37,8 @@ function CVIntelligenceTab() {
   const [isLoading, setIsLoading] = useState(false);
   const [isScanning, setIsScanning] = useState(false);
   const [scanProgress, setScanProgress] = useState<{ scanned: number; total: number } | null>(null);
+  const [isEnriching, setIsEnriching] = useState(false);
+  const [enrichProgress, setEnrichProgress] = useState<{ enriched: number; total: number } | null>(null);
   const [isSavingPath, setIsSavingPath] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [lastIndexed, setLastIndexed] = useState<string | null>(null);
@@ -101,21 +103,10 @@ function CVIntelligenceTab() {
     setError(null);
     setScanProgress(null);
 
-    // Files attempted this session — sent back to server each iteration so
-    // unreadable files are not retried, preventing infinite loops.
-    const sessionSkipNames: string[] = [];
-
     try {
       let done = false;
       while (!done) {
-        const res = await fetch("/api/cv/index", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            accessToken: session.accessToken,
-            skipFileNames: sessionSkipNames,
-          }),
-        });
+        const res = await fetch("/api/cv/index", { method: "POST" });
 
         const bodyText = await res.text().catch(() => "");
         let data: Record<string, unknown> = {};
@@ -130,31 +121,62 @@ function CVIntelligenceTab() {
           );
         }
 
-        if (res.status === 401 && data.tokenExpired) {
-          signIn("azure-ad");
-          return;
-        }
+        if (res.status === 401) { signIn("azure-ad"); return; }
         if (!res.ok) throw new Error((data.error as string) ?? "Scan failed");
 
-        // Accumulate attempted file names so the server skips them next batch
-        const attempted = (data.batchAttempted as string[]) ?? [];
-        sessionSkipNames.push(...attempted);
-
-        const totalFiles = (data.totalFiles as number) ?? 0;
+        const count = (data.count as number) ?? 0;
         const remainingFiles = (data.remainingFiles as number) ?? 0;
         done = (data.done as boolean) ?? true;
 
-        setCandidates((data.candidates as CVCandidate[]) ?? []);
-        if ((data.count as number) > 0) setLastIndexed(new Date().toISOString());
+        if (count > 0) setLastIndexed(new Date().toISOString());
         setScanProgress(
-          totalFiles > 0 ? { scanned: totalFiles - remainingFiles, total: totalFiles } : null
+          count > 0 ? { scanned: count, total: count + remainingFiles } : null
         );
       }
+      // Reload index after scan completes
+      await loadIndex();
     } catch (err) {
       setError(err instanceof Error ? err.message : "Scan failed");
     } finally {
       setIsScanning(false);
       setScanProgress(null);
+    }
+  };
+
+  const enrichCVs = async () => {
+    if (!session?.accessToken || session?.error === "RefreshAccessTokenError") return;
+    setIsEnriching(true);
+    setError(null);
+    setEnrichProgress(null);
+
+    try {
+      let done = false;
+      while (!done) {
+        const res = await fetch("/api/cv/enrich", { method: "POST" });
+
+        const bodyText = await res.text().catch(() => "");
+        let data: Record<string, unknown> = {};
+        try {
+          data = bodyText ? JSON.parse(bodyText) : {};
+        } catch {
+          throw new Error(`Server error (${res.status})`);
+        }
+
+        if (res.status === 401) { signIn("azure-ad"); return; }
+        if (!res.ok) throw new Error((data.error as string) ?? "Enrichment failed");
+
+        const total = (data.total as number) ?? 0;
+        const remaining = (data.remaining as number) ?? 0;
+        done = (data.done as boolean) ?? true;
+
+        setEnrichProgress({ enriched: total - remaining, total });
+      }
+      await loadIndex();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Enrichment failed");
+    } finally {
+      setIsEnriching(false);
+      setEnrichProgress(null);
     }
   };
 
@@ -213,52 +235,76 @@ function CVIntelligenceTab() {
         )}
       </div>
 
-      {/* Scan button */}
-      <div className="flex items-center justify-between">
-        <div>
-          <p className="text-xs" style={{ color: LIGHT_BLUE }}>
-            {candidates.length > 0
-              ? `${candidates.length} candidate${candidates.length !== 1 ? "s" : ""} indexed`
-              : "No candidates indexed yet"}
-            {lastIndexed && (
-              <span className="ml-2">
-                · Last scanned {new Date(lastIndexed).toLocaleDateString("en-AU")}
-              </span>
-            )}
-          </p>
-        </div>
-        <button
-          onClick={scanCVs}
-          disabled={isScanning || !session?.accessToken || session?.error === "RefreshAccessTokenError"}
-          className="flex items-center gap-2 px-4 py-2.5 rounded-xl text-sm font-semibold"
-          style={{
-            backgroundColor:
-              isScanning || !session?.accessToken || session?.error === "RefreshAccessTokenError" ? PALE : NAVY,
-            color: isScanning || !session?.accessToken || session?.error === "RefreshAccessTokenError" ? LIGHT_BLUE : "#FFFFFF",
-            fontFamily: "var(--font-poppins), Poppins, sans-serif",
-            cursor:
-              isScanning || !session?.accessToken || session?.error === "RefreshAccessTokenError" ? "not-allowed" : "pointer",
-          }}
-        >
-          {isScanning ? (
-            <>
-              <svg className="w-4 h-4 animate-spin" fill="none" viewBox="0 0 24 24">
-                <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
-                <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
-              </svg>
-              {scanProgress
-                ? `Scanning ${scanProgress.scanned} of ${scanProgress.total} files…`
-                : "Starting scan…"}
-            </>
-          ) : (
-            <>
-              <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12" />
-              </svg>
-              Scan CVs
-            </>
+      {/* Scan + Enrich buttons */}
+      <div className="flex items-center justify-between gap-3 flex-wrap">
+        <p className="text-xs" style={{ color: LIGHT_BLUE }}>
+          {candidates.length > 0
+            ? `${candidates.length} candidate${candidates.length !== 1 ? "s" : ""} indexed`
+            : "No candidates indexed yet"}
+          {lastIndexed && (
+            <span className="ml-2">
+              · Last scanned {new Date(lastIndexed).toLocaleDateString("en-AU")}
+            </span>
           )}
-        </button>
+        </p>
+        <div className="flex items-center gap-2">
+          <button
+            onClick={scanCVs}
+            disabled={isScanning || isEnriching || !session?.accessToken || session?.error === "RefreshAccessTokenError"}
+            className="flex items-center gap-2 px-4 py-2.5 rounded-xl text-sm font-semibold"
+            style={{
+              backgroundColor: isScanning || isEnriching || !session?.accessToken || session?.error === "RefreshAccessTokenError" ? PALE : NAVY,
+              color: isScanning || isEnriching || !session?.accessToken || session?.error === "RefreshAccessTokenError" ? LIGHT_BLUE : "#FFFFFF",
+              fontFamily: "var(--font-poppins), Poppins, sans-serif",
+              cursor: isScanning || isEnriching || !session?.accessToken || session?.error === "RefreshAccessTokenError" ? "not-allowed" : "pointer",
+            }}
+          >
+            {isScanning ? (
+              <>
+                <svg className="w-4 h-4 animate-spin" fill="none" viewBox="0 0 24 24">
+                  <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                  <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+                </svg>
+                {scanProgress ? `Scanning ${scanProgress.scanned} / ${scanProgress.total}…` : "Starting scan…"}
+              </>
+            ) : (
+              <>
+                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12" />
+                </svg>
+                Scan CVs
+              </>
+            )}
+          </button>
+          <button
+            onClick={enrichCVs}
+            disabled={isScanning || isEnriching || !session?.accessToken || session?.error === "RefreshAccessTokenError"}
+            className="flex items-center gap-2 px-4 py-2.5 rounded-xl text-sm font-semibold"
+            style={{
+              backgroundColor: isScanning || isEnriching || !session?.accessToken || session?.error === "RefreshAccessTokenError" ? PALE : GREEN,
+              color: isScanning || isEnriching || !session?.accessToken || session?.error === "RefreshAccessTokenError" ? LIGHT_BLUE : NAVY,
+              fontFamily: "var(--font-poppins), Poppins, sans-serif",
+              cursor: isScanning || isEnriching || !session?.accessToken || session?.error === "RefreshAccessTokenError" ? "not-allowed" : "pointer",
+            }}
+          >
+            {isEnriching ? (
+              <>
+                <svg className="w-4 h-4 animate-spin" fill="none" viewBox="0 0 24 24">
+                  <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                  <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+                </svg>
+                {enrichProgress ? `Enriching ${enrichProgress.enriched} / ${enrichProgress.total}…` : "Starting enrichment…"}
+              </>
+            ) : (
+              <>
+                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9.663 17h4.673M12 3v1m6.364 1.636l-.707.707M21 12h-1M4 12H3m3.343-5.657l-.707-.707m2.828 9.9a5 5 0 117.072 0l-.347.347a3.001 3.001 0 00-.765 1.965v.201a2 2 0 01-2 2h-1.172a2 2 0 01-2-2v-.201a3.001 3.001 0 00-.765-1.965l-.347-.347z" />
+                </svg>
+                Enrich CVs
+              </>
+            )}
+          </button>
+        </div>
       </div>
 
       {session?.error === "RefreshAccessTokenError" && (

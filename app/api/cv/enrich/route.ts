@@ -1,87 +1,170 @@
-import { NextRequest, NextResponse } from "next/server";
-import Anthropic from "@anthropic-ai/sdk";
+import { NextResponse } from "next/server";
 import { kv } from "@vercel/kv";
+import { getServerSession } from "next-auth/next";
+import { authOptions } from "@/lib/auth";
+import { graphFetch } from "@/lib/graph";
 import type { CVCandidate } from "@/lib/cv-context";
 
-export const maxDuration = 30;
+export const maxDuration = 60;
 
-const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
+const BATCH_SIZE = 3;
 
-// POST — enrich a single already-indexed candidate with Claude extraction
-// Body: { candidateId: string, text: string }
-export async function POST(request: NextRequest) {
+const MEDIA_TYPES: Record<string, string> = {
+  ".pdf": "application/pdf",
+  ".docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+  ".doc": "application/msword",
+};
+
+// GET — return enrichment stats
+export async function GET() {
   try {
-    const body = await request.json().catch(() => ({}));
-    const candidateId: string | undefined = body.candidateId;
-    const text: string | undefined = body.text;
-
-    if (!candidateId || !text) {
-      return NextResponse.json({ error: "candidateId and text required" }, { status: 400 });
-    }
-
     const indexRecord = (await kv.get<Record<string, CVCandidate>>("cv:index")) ?? {};
-    const candidate = indexRecord[candidateId];
-
-    if (!candidate) {
-      return NextResponse.json({ error: "Candidate not found" }, { status: 404 });
-    }
-
-    const truncated = text.trim().substring(0, 3000);
-
-    const extractRes = await anthropic.messages.create({
-      model: "claude-haiku-4-5-20251001",
-      max_tokens: 600,
-      messages: [
-        {
-          role: "user",
-          content: `Extract candidate info from this CV. Return JSON only:
-{"name":"...", "currentRole":"...", "currentEmployer":"...", "yearsExperience":5, "skills":["TypeScript","React"], "sectorExperience":["fintech","healthtech"], "location":"Sydney, Australia", "seniority":"senior"}
-
-currentEmployer: the name of the company where they currently work or most recently worked.
-seniority options: "junior" (0-2yr), "mid" (2-5yr), "senior" (5-10yr), "lead" (team lead), "principal" (staff+)
-
-CV text:
-${truncated}
-
-Return ONLY the JSON object.`,
-        },
-      ],
+    const candidates = Object.values(indexRecord);
+    const enrichedCount = candidates.filter((c) => c.enriched).length;
+    return NextResponse.json({
+      total: candidates.length,
+      enrichedCount,
+      unenrichedCount: candidates.length - enrichedCount,
     });
+  } catch (err) {
+    console.error("[cv/enrich] GET error:", err);
+    return NextResponse.json(
+      { error: err instanceof Error ? err.message : "Failed to load stats" },
+      { status: 500 }
+    );
+  }
+}
 
-    const raw =
-      extractRes.content[0].type === "text"
-        ? extractRes.content[0].text.trim()
-        : "{}";
-    const clean = raw.replace(/^```(?:json)?\n?/, "").replace(/\n?```$/, "");
+// POST — enrich next batch of stub candidates using Claude's native PDF reading
+export async function POST() {
+  try {
+    const session = await getServerSession(authOptions);
+    if (!session?.accessToken) {
+      return NextResponse.json(
+        { error: "Not authenticated. Please sign in with Microsoft." },
+        { status: 401 }
+      );
+    }
+    const accessToken = session.accessToken;
 
-    let extracted: Partial<CVCandidate> = {};
-    try {
-      extracted = JSON.parse(clean);
-    } catch {
-      extracted = {};
+    // ── Find unenriched candidates ────────────────────────────────────────────
+    const indexRecord = (await kv.get<Record<string, CVCandidate>>("cv:index")) ?? {};
+    const all = Object.values(indexRecord);
+    const unenriched = all.filter((c) => !c.enriched);
+
+    if (unenriched.length === 0) {
+      return NextResponse.json({ enriched: 0, remaining: 0, total: all.length, done: true });
     }
 
-    const enriched: CVCandidate = {
-      ...candidate,
-      name: extracted.name ?? candidate.name,
-      currentRole: extracted.currentRole ?? candidate.currentRole,
-      currentEmployer: extracted.currentEmployer ?? candidate.currentEmployer,
-      yearsExperience: extracted.yearsExperience ?? candidate.yearsExperience,
-      skills: extracted.skills ?? candidate.skills,
-      sectorExperience: extracted.sectorExperience ?? candidate.sectorExperience,
-      location: extracted.location ?? candidate.location,
-      seniority: extracted.seniority ?? candidate.seniority,
-      enriched: true,
-    };
+    const batch = unenriched.slice(0, BATCH_SIZE);
+    let enrichedThisBatch = 0;
 
-    indexRecord[candidateId] = enriched;
+    for (const candidate of batch) {
+      try {
+        // ── Download file from OneDrive ───────────────────────────────────────
+        const encodedName = encodeURIComponent(candidate.fileName).replace(/'/g, "%27");
+        const downloadRes = await graphFetch(
+          `https://graph.microsoft.com/v1.0/me/drive/root:/CV%27s/${encodedName}:/content`,
+          accessToken
+        );
+
+        if (!downloadRes.ok) {
+          const errBody = await downloadRes.text().catch(() => "");
+          console.warn(`[cv/enrich] download failed for ${candidate.fileName}: ${downloadRes.status} ${errBody.substring(0, 200)}`);
+          // Mark as enriched=true with downloadFailed so it's not retried
+          indexRecord[candidate.id] = { ...candidate, enriched: true, downloadFailed: true };
+          continue;
+        }
+
+        const buffer = Buffer.from(await downloadRes.arrayBuffer());
+        const base64 = buffer.toString("base64");
+
+        const ext = candidate.fileName.toLowerCase().match(/\.[^.]+$/)?.[0] ?? ".pdf";
+        const mediaType = MEDIA_TYPES[ext] ?? "application/pdf";
+
+        // ── Call Claude with native document reading ──────────────────────────
+        const claudeRes = await fetch("https://api.anthropic.com/v1/messages", {
+          method: "POST",
+          headers: {
+            "x-api-key": process.env.ANTHROPIC_API_KEY ?? "",
+            "anthropic-version": "2023-06-01",
+            "content-type": "application/json",
+          },
+          body: JSON.stringify({
+            model: "claude-sonnet-4-20250514",
+            max_tokens: 1024,
+            messages: [
+              {
+                role: "user",
+                content: [
+                  {
+                    type: "document",
+                    source: { type: "base64", media_type: mediaType, data: base64 },
+                  },
+                  {
+                    type: "text",
+                    text: 'Extract the following from this CV and respond ONLY with valid JSON, no markdown fences:\n{"name":"full name","currentRole":"most recent job title","skills":["skill1","skill2"],"sectorExperience":["sector1","sector2"],"seniority":"junior|mid|senior|principal","yearsExperience":0,"location":"city, state/country"}',
+                  },
+                ],
+              },
+            ],
+          }),
+        });
+
+        if (!claudeRes.ok) {
+          const claudeErr = await claudeRes.text().catch(() => "");
+          console.warn(`[cv/enrich] Claude failed for ${candidate.fileName}: ${claudeRes.status} ${claudeErr.substring(0, 200)}`);
+          indexRecord[candidate.id] = { ...candidate, enriched: true, downloadFailed: true };
+          continue;
+        }
+
+        const claudeData = await claudeRes.json() as {
+          content: { type: string; text: string }[];
+        };
+        const raw = claudeData.content?.[0]?.type === "text" ? claudeData.content[0].text.trim() : "{}";
+
+        let extracted: Partial<CVCandidate> = {};
+        try {
+          extracted = JSON.parse(raw);
+        } catch {
+          console.warn(`[cv/enrich] JSON parse failed for ${candidate.fileName}: ${raw.substring(0, 100)}`);
+        }
+
+        indexRecord[candidate.id] = {
+          ...candidate,
+          name: extracted.name ?? candidate.name,
+          currentRole: extracted.currentRole ?? candidate.currentRole,
+          currentEmployer: extracted.currentEmployer ?? candidate.currentEmployer,
+          yearsExperience: extracted.yearsExperience ?? candidate.yearsExperience,
+          skills: extracted.skills ?? candidate.skills,
+          sectorExperience: extracted.sectorExperience ?? candidate.sectorExperience,
+          location: extracted.location ?? candidate.location,
+          seniority: extracted.seniority ?? candidate.seniority,
+          enriched: true,
+        };
+
+        enrichedThisBatch++;
+        console.log(`[cv/enrich] enriched ${candidate.fileName} → ${extracted.name ?? candidate.name}`);
+      } catch (candidateErr) {
+        console.error(`[cv/enrich] unexpected error for ${candidate.fileName}:`, candidateErr);
+        // Mark done so we don't retry indefinitely
+        indexRecord[candidate.id] = { ...candidate, enriched: true, downloadFailed: true };
+      }
+    }
+
     await kv.set("cv:index", indexRecord);
 
-    console.log(`[cv/enrich] enriched ${enriched.fileName} → ${enriched.name}`);
+    const updatedAll = Object.values(indexRecord);
+    const remaining = updatedAll.filter((c) => !c.enriched).length;
 
-    return NextResponse.json({ candidate: enriched });
+    return NextResponse.json({
+      enriched: enrichedThisBatch,
+      remaining,
+      total: updatedAll.length,
+      done: remaining === 0,
+    });
   } catch (err) {
-    console.error("cv/enrich POST error:", err);
+    console.error("[cv/enrich] POST error:", err);
     return NextResponse.json(
       { error: err instanceof Error ? err.message : "Enrichment failed" },
       { status: 500 }
