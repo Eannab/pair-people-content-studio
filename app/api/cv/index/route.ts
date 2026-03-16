@@ -9,12 +9,14 @@ import type { CVSettings } from "@/app/api/cv/settings/route";
 export const maxDuration = 60;
 
 const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
-const BATCH_SIZE = 20;
+const BATCH_SIZE = 5;
+const CLAUDE_TIMEOUT_MS = 8000;
 
 // GET — return current CV index
 export async function GET() {
   try {
-    const index = (await kv.get<CVCandidate[]>("cv:index")) ?? [];
+    const indexRecord = (await kv.get<Record<string, CVCandidate>>("cv:index")) ?? {};
+    const index = Object.values(indexRecord);
     return NextResponse.json({ candidates: index, count: index.length });
   } catch (err) {
     console.error("cv/index GET error:", err);
@@ -27,8 +29,6 @@ export async function POST(request: NextRequest) {
   try {
     const body = await request.json().catch(() => ({}));
     const accessToken: string | undefined = body.accessToken;
-    // Files already attempted this scan session (client accumulates across batches)
-    const skipFileNames = new Set<string>((body.skipFileNames as string[]) ?? []);
 
     if (!accessToken) {
       return NextResponse.json({ error: "accessToken required" }, { status: 400 });
@@ -125,27 +125,19 @@ export async function POST(request: NextRequest) {
     }
 
     // ── Determine which files still need processing ───────────────────────────
-    // Load the current index so we can skip already-indexed, unmodified files.
-    const existingIndex = (await kv.get<CVCandidate[]>("cv:index")) ?? [];
-    const indexedMap = new Map(
-      existingIndex.map((c) => [c.fileName, c.fileModifiedAt ?? ""])
-    );
+    const [existingIndexRecord, indexedFileIds] = await Promise.all([
+      kv.get<Record<string, CVCandidate>>("cv:index"),
+      kv.get<string[]>("cv:indexed-file-ids"),
+    ]);
+    const existingIndex = existingIndexRecord ?? {};
+    const indexedFileIdSet = new Set<string>(indexedFileIds ?? []);
 
-    const pendingFiles = cvFiles.filter((f) => {
-      // Client-side skip: file was attempted (and failed) earlier in this session
-      if (skipFileNames.has(f.name)) return false;
-      // Already indexed with the same modification date — nothing to do
-      const existingModified = indexedMap.get(f.name);
-      if (existingModified !== undefined && existingModified === (f.lastModifiedDateTime ?? "")) {
-        return false;
-      }
-      return true;
-    });
+    const pendingFiles = cvFiles.filter((f) => !indexedFileIdSet.has(f.id));
 
     if (pendingFiles.length === 0) {
       return NextResponse.json({
-        candidates: existingIndex,
-        count: existingIndex.length,
+        candidates: Object.values(existingIndex),
+        count: Object.keys(existingIndex).length,
         batchProcessed: 0,
         batchAttempted: [],
         totalFiles: cvFiles.length,
@@ -160,6 +152,7 @@ export async function POST(request: NextRequest) {
     // ── Process each file in the batch ────────────────────────────────────────
     const now = new Date().toISOString();
     const newCandidates: CVCandidate[] = [];
+    const processedFileIds: string[] = [];
 
     for (const file of batch) {
       try {
@@ -186,13 +179,16 @@ export async function POST(request: NextRequest) {
 
         const truncated = text.trim().substring(0, 3000);
 
-        const extractRes = await anthropic.messages.create({
-          model: "claude-haiku-4-5-20251001",
-          max_tokens: 600,
-          messages: [
-            {
-              role: "user",
-              content: `Extract candidate info from this CV. Return JSON only:
+        let extracted: Partial<CVCandidate> = {};
+        try {
+          const extractRes = await Promise.race([
+            anthropic.messages.create({
+              model: "claude-haiku-4-5-20251001",
+              max_tokens: 600,
+              messages: [
+                {
+                  role: "user",
+                  content: `Extract candidate info from this CV. Return JSON only:
 {"name":"...", "currentRole":"...", "currentEmployer":"...", "yearsExperience":5, "skills":["TypeScript","React"], "sectorExperience":["fintech","healthtech"], "location":"Sydney, Australia", "seniority":"senior"}
 
 currentEmployer: the name of the company where they currently work or most recently worked.
@@ -202,28 +198,31 @@ CV text:
 ${truncated}
 
 Return ONLY the JSON object.`,
-            },
-          ],
-        });
-
-        const raw =
-          extractRes.content[0].type === "text"
-            ? extractRes.content[0].text.trim()
-            : "{}";
-        const clean = raw.replace(/^```(?:json)?\n?/, "").replace(/\n?```$/, "");
-
-        let extracted: Partial<CVCandidate> = {};
-        try {
-          extracted = JSON.parse(clean);
-        } catch {
-          extracted = {};
+                },
+              ],
+            }),
+            new Promise<never>((_, reject) =>
+              setTimeout(() => reject(new Error("Claude extraction timed out")), CLAUDE_TIMEOUT_MS)
+            ),
+          ]);
+          const raw =
+            extractRes.content[0].type === "text"
+              ? extractRes.content[0].text.trim()
+              : "{}";
+          const clean = raw.replace(/^```(?:json)?\n?/, "").replace(/\n?```$/, "");
+          try {
+            extracted = JSON.parse(clean);
+          } catch {
+            extracted = {};
+          }
+        } catch (extractErr) {
+          console.warn(`[cv/index] Claude extraction failed for ${file.name}: ${extractErr instanceof Error ? extractErr.message : extractErr}`);
         }
 
-        if (!extracted.name) continue;
-
+        const fallbackName = file.name.replace(/\.[^.]+$/, "");
         newCandidates.push({
           id: uuidv4(),
-          name: extracted.name ?? file.name,
+          name: extracted.name ?? fallbackName,
           currentRole: extracted.currentRole ?? "",
           currentEmployer: extracted.currentEmployer ?? "",
           yearsExperience: extracted.yearsExperience ?? 0,
@@ -235,24 +234,30 @@ Return ONLY the JSON object.`,
           fileModifiedAt: file.lastModifiedDateTime ?? "",
           indexedAt: now,
         });
+        processedFileIds.push(file.id);
       } catch (fileErr) {
         if (fileErr instanceof GraphAuthError) throw fileErr; // bubble up
         console.error(`Error processing ${file.name}:`, fileErr);
       }
     }
 
-    // ── Merge into existing index and persist ─────────────────────────────────
-    // Replace existing entries for files in this batch; append new ones.
-    const batchFileNames = new Set(batch.map((f) => f.name));
-    const mergedIndex = [
-      ...existingIndex.filter((c) => !batchFileNames.has(c.fileName)),
-      ...newCandidates,
-    ];
-    await kv.set("cv:index", mergedIndex);
+    console.log(`[cv/index] batch attempted: ${batch.length}, extracted by Claude: ${newCandidates.filter(c => c.name !== c.fileName.replace(/\.[^.]+$/, "")).length}, total indexed this batch: ${newCandidates.length}`);
 
+    // ── Merge into existing index and persist ─────────────────────────────────
+    const mergedIndexRecord = { ...existingIndex };
+    for (const candidate of newCandidates) {
+      mergedIndexRecord[candidate.id] = candidate;
+    }
+    const updatedFileIds = [...indexedFileIdSet, ...processedFileIds];
+    await Promise.all([
+      kv.set("cv:index", mergedIndexRecord),
+      kv.set("cv:indexed-file-ids", updatedFileIds),
+    ]);
+
+    const mergedCandidates = Object.values(mergedIndexRecord);
     return NextResponse.json({
-      candidates: mergedIndex,
-      count: mergedIndex.length,
+      candidates: mergedCandidates,
+      count: mergedCandidates.length,
       batchProcessed: newCandidates.length,
       batchAttempted: batch.map((f) => f.name),
       totalFiles: cvFiles.length,
