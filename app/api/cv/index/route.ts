@@ -32,6 +32,28 @@ export async function POST(request: NextRequest) {
     const settings = await kv.get<CVSettings>("cv:settings");
     const folderPath = settings?.folderPath?.trim() || "/Active CVs";
 
+    // ── Pre-flight: verify the token is still valid ───────────────────────────
+    // A cheap /me call catches a stale token before we start scanning files.
+    // graphFetch throws GraphAuthError on 401, caught by the outer handler.
+    {
+      const meRes = await graphFetch(
+        "https://graph.microsoft.com/v1.0/me?$select=id",
+        accessToken
+      );
+      // If Graph returns a non-401 error here (e.g. 403) it's a permissions
+      // issue — surface it immediately rather than failing later mid-scan.
+      if (!meRes.ok) {
+        const bodyText = await meRes.text().catch(() => "");
+        let msg = `Graph API ${meRes.status}`;
+        try { msg = (JSON.parse(bodyText) as { error?: { message?: string } })?.error?.message ?? msg; }
+        catch { if (bodyText) msg = bodyText.substring(0, 200); }
+        return NextResponse.json(
+          { error: `Microsoft token check failed: ${msg}` },
+          { status: 502 }
+        );
+      }
+    }
+
     // ── List files in the OneDrive folder ────────────────────────────────────
     // Encode each path segment individually so slashes are preserved as
     // separators and special characters (spaces, apostrophes, etc.) are safe.
@@ -51,16 +73,37 @@ export async function POST(request: NextRequest) {
     while (nextUrl) {
       const listRes = await graphFetch(nextUrl, accessToken);
 
+      // Read the body once as text so we can safely parse it as JSON without
+      // risking a thrown SyntaxError from a non-JSON error page (e.g. an Azure
+      // gateway returning "An error occurred…" as plain text).
+      const bodyText = await listRes.text().catch(() => "");
+
       if (!listRes.ok) {
-        const errBody = await listRes.json().catch(() => ({}));
-        const msg = errBody?.error?.message ?? `Graph API ${listRes.status}`;
+        let msg = `Graph API ${listRes.status}`;
+        try {
+          const errBody = JSON.parse(bodyText) as { error?: { message?: string } };
+          msg = errBody?.error?.message ?? msg;
+        } catch {
+          if (bodyText) msg = bodyText.substring(0, 200);
+        }
         return NextResponse.json(
           { error: `OneDrive list failed: ${msg}` },
           { status: 502 }
         );
       }
 
-      const listData = await listRes.json();
+      let listData: { value?: DriveItem[]; "@odata.nextLink"?: string };
+      try {
+        listData = JSON.parse(bodyText);
+      } catch {
+        // Graph returned a 2xx but with a non-JSON body (proxy/gateway error).
+        const preview = bodyText.substring(0, 120).replace(/\s+/g, " ");
+        return NextResponse.json(
+          { error: `OneDrive returned an unexpected response: ${preview}` },
+          { status: 502 }
+        );
+      }
+
       allItems.push(...(listData.value ?? []));
       nextUrl = listData["@odata.nextLink"] ?? null;
     }
