@@ -7,7 +7,8 @@ import type { CVCandidate } from "@/lib/cv-context";
 
 export const maxDuration = 60;
 
-const BATCH_SIZE = 3;
+const BATCH_SIZE = 2;
+const FILE_TIMEOUT_MS = 25_000;
 
 const MEDIA_TYPES: Record<string, string> = {
   ".pdf": "application/pdf",
@@ -60,12 +61,19 @@ export async function POST() {
     let enrichedThisBatch = 0;
 
     for (const candidate of batch) {
+      const controller = new AbortController();
+      const timer = setTimeout(() => {
+        controller.abort();
+        console.warn(`[cv/enrich] timeout (${FILE_TIMEOUT_MS}ms) for ${candidate.fileName} — skipping`);
+      }, FILE_TIMEOUT_MS);
+
       try {
         // ── Download file from OneDrive ───────────────────────────────────────
         const encodedName = encodeURIComponent(candidate.fileName).replace(/'/g, "%27");
         const downloadRes = await graphFetch(
           `https://graph.microsoft.com/v1.0/me/drive/root:/CV%27s/${encodedName}:/content`,
-          accessToken
+          accessToken,
+          { signal: controller.signal }
         );
 
         if (!downloadRes.ok) {
@@ -84,6 +92,7 @@ export async function POST() {
 
         // ── Call Claude with native document reading ──────────────────────────
         const claudeRes = await fetch("https://api.anthropic.com/v1/messages", {
+          signal: controller.signal,
           method: "POST",
           headers: {
             "x-api-key": process.env.ANTHROPIC_API_KEY ?? "",
@@ -146,9 +155,15 @@ export async function POST() {
         enrichedThisBatch++;
         console.log(`[cv/enrich] enriched ${candidate.fileName} → ${extracted.name ?? candidate.name}`);
       } catch (candidateErr) {
-        console.error(`[cv/enrich] unexpected error for ${candidate.fileName}:`, candidateErr);
-        // Mark done so we don't retry indefinitely
-        indexRecord[candidate.id] = { ...candidate, enriched: true, downloadFailed: true };
+        if (candidateErr instanceof Error && candidateErr.name === "AbortError") {
+          // Timed out — leave enriched: false so it's retried next batch
+        } else {
+          console.error(`[cv/enrich] unexpected error for ${candidate.fileName}:`, candidateErr);
+          // Mark done so we don't retry indefinitely on hard failures
+          indexRecord[candidate.id] = { ...candidate, enriched: true, downloadFailed: true };
+        }
+      } finally {
+        clearTimeout(timer);
       }
     }
 
