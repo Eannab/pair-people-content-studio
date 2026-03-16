@@ -73,7 +73,13 @@ interface ImageConcept {
   dallePrompt: string;
 }
 
-type AIStage = "idle" | "loading_concepts" | "concepts" | "generating" | "done";
+interface Generation {
+  imageUrl: string;
+  prompt: string;
+  label: string;
+}
+
+type AIStage = "idle" | "loading_concepts" | "concepts" | "generating" | "done" | "refining";
 
 function Spinner({ className = "w-4 h-4" }: { className?: string }) {
   return (
@@ -95,8 +101,9 @@ function AIImageSection({
   const [stage, setStage] = useState<AIStage>("idle");
   const [concepts, setConcepts] = useState<ImageConcept[]>([]);
   const [selectedConcept, setSelectedConcept] = useState<ImageConcept | null>(null);
-  const [imageUrl, setImageUrl] = useState<string | null>(null);
-  const [usedPrompt, setUsedPrompt] = useState<string | null>(null);
+  const [generations, setGenerations] = useState<Generation[]>([]);
+  const [chosenIdx, setChosenIdx] = useState(0);
+  const [refinementInstruction, setRefinementInstruction] = useState("");
   const [error, setError] = useState<string | null>(null);
 
   const generateConcepts = async () => {
@@ -104,8 +111,9 @@ function AIImageSection({
     setError(null);
     setConcepts([]);
     setSelectedConcept(null);
-    setImageUrl(null);
-    setUsedPrompt(null);
+    setGenerations([]);
+    setChosenIdx(0);
+    setRefinementInstruction("");
 
     try {
       const res = await fetch("/api/generate-image/concepts", {
@@ -136,8 +144,8 @@ function AIImageSection({
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || "Image generation failed");
-      setImageUrl(data.imageUrl);
-      setUsedPrompt(data.prompt);
+      setGenerations([{ imageUrl: data.imageUrl, prompt: data.prompt, label: concept.title }]);
+      setChosenIdx(0);
       setStage("done");
     } catch (err) {
       setError(err instanceof Error ? err.message : "Something went wrong");
@@ -145,11 +153,57 @@ function AIImageSection({
     }
   };
 
-  const handleDownload = () => {
-    if (!imageUrl) return;
+  const refineImage = async () => {
+    if (!refinementInstruction.trim() || generations.length === 0) return;
+    setStage("refining");
+    setError(null);
+
+    try {
+      // Step 1: get refined prompt from Claude
+      const refineRes = await fetch("/api/generate-image/refine", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          currentPrompt: generations[0].prompt,
+          instruction: refinementInstruction.trim(),
+        }),
+      });
+      const refineData = await refineRes.json();
+      if (!refineRes.ok) throw new Error(refineData.error || "Refinement failed");
+
+      // Step 2: generate image with refined prompt
+      const imgRes = await fetch("/api/generate-image", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ dallePrompt: refineData.refinedPrompt }),
+      });
+      const imgData = await imgRes.json();
+      if (!imgRes.ok) throw new Error(imgData.error || "Image generation failed");
+
+      const shortInstruction =
+        refinementInstruction.trim().length > 40
+          ? refinementInstruction.trim().substring(0, 37) + "…"
+          : refinementInstruction.trim();
+
+      setGenerations((prev) => [
+        { imageUrl: imgData.imageUrl, prompt: imgData.prompt, label: `Refined: ${shortInstruction}` },
+        ...prev,
+      ]);
+      setChosenIdx(0);
+      setRefinementInstruction("");
+      setStage("done");
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Something went wrong");
+      setStage("done");
+    }
+  };
+
+  const handleDownload = (idx: number) => {
+    const gen = generations[idx];
+    if (!gen) return;
     const link = document.createElement("a");
     link.download = "pair-people-post-image.png";
-    link.href = imageUrl;
+    link.href = gen.imageUrl;
     link.click();
   };
 
@@ -335,72 +389,199 @@ function AIImageSection({
         </div>
       )}
 
-      {/* ── Stage: done — show image ── */}
-      {stage === "done" && imageUrl && (
-        <div className="space-y-3">
+      {/* ── Stage: done / refining — show generations + refinement ── */}
+      {(stage === "done" || stage === "refining") && generations.length > 0 && (
+        <div className="space-y-4">
+          {/* Refinement input */}
           <div
-            className="rounded-xl overflow-hidden"
-            style={{ border: "1.5px solid #E7EDF3" }}
+            className="rounded-xl px-4 py-3 space-y-2"
+            style={{ backgroundColor: "#F4F5F9", border: "1.5px solid #E7EDF3" }}
           >
-            {/* eslint-disable-next-line @next/next/no-img-element */}
-            <img
-              src={imageUrl}
-              alt="AI-generated post image"
-              className="w-full h-auto block"
-            />
+            <p
+              className="text-xs font-semibold uppercase tracking-wider"
+              style={{ color: "#323B6A", fontFamily: "var(--font-poppins), Poppins, sans-serif" }}
+            >
+              Refine image
+            </p>
+            <div className="flex gap-2">
+              <input
+                type="text"
+                value={refinementInstruction}
+                onChange={(e) => setRefinementInstruction(e.target.value)}
+                disabled={stage === "refining"}
+                placeholder="e.g. make it darker, more abstract, remove the person…"
+                className="flex-1 px-3 py-2 rounded-lg text-sm outline-none"
+                style={{
+                  border: "1.5px solid #E7EDF3",
+                  color: stage === "refining" ? "#A7B8D1" : "#323B6A",
+                  backgroundColor: stage === "refining" ? "#F9FAFB" : "#FFFFFF",
+                }}
+                onFocus={(e) => {
+                  if (stage !== "refining") {
+                    e.currentTarget.style.borderColor = "#BDCF7C";
+                    e.currentTarget.style.boxShadow = "0 0 0 3px rgba(189,207,124,0.15)";
+                  }
+                }}
+                onBlur={(e) => {
+                  e.currentTarget.style.borderColor = "#E7EDF3";
+                  e.currentTarget.style.boxShadow = "none";
+                }}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter" && stage !== "refining") refineImage();
+                }}
+              />
+              <button
+                onClick={refineImage}
+                disabled={stage === "refining" || !refinementInstruction.trim()}
+                className="px-4 py-2 rounded-lg text-sm font-semibold flex items-center gap-1.5 transition-all duration-150"
+                style={{
+                  backgroundColor:
+                    stage === "refining" || !refinementInstruction.trim() ? "#E7EDF3" : "#323B6A",
+                  color:
+                    stage === "refining" || !refinementInstruction.trim() ? "#A7B8D1" : "#FFFFFF",
+                  fontFamily: "var(--font-poppins), Poppins, sans-serif",
+                  cursor: stage === "refining" || !refinementInstruction.trim() ? "default" : "pointer",
+                }}
+              >
+                {stage === "refining" ? (
+                  <>
+                    <Spinner className="w-3.5 h-3.5" />
+                    Refining…
+                  </>
+                ) : (
+                  "Refine"
+                )}
+              </button>
+            </div>
           </div>
 
-          {selectedConcept && (
-            <p className="text-xs px-1" style={{ color: "#A7B8D1" }}>
-              <span style={{ color: "#6F92BF", fontWeight: 600 }}>Concept: </span>
-              {selectedConcept.title}
-            </p>
-          )}
+          {/* Generations list — newest first */}
+          {generations.map((gen, idx) => {
+            const isChosen = chosenIdx === idx;
+            return (
+              <div
+                key={idx}
+                className="space-y-2"
+                style={{
+                  opacity: stage === "refining" && idx === 0 ? 0.5 : 1,
+                  transition: "opacity 0.2s",
+                }}
+              >
+                {/* Version label */}
+                <div className="flex items-center justify-between px-0.5">
+                  <p
+                    className="text-xs font-semibold"
+                    style={{
+                      color: isChosen ? "#323B6A" : "#A7B8D1",
+                      fontFamily: "var(--font-poppins), Poppins, sans-serif",
+                    }}
+                  >
+                    {idx === 0 ? "Latest" : `v${generations.length - idx}`}
+                    {" · "}
+                    <span style={{ fontWeight: 400 }}>{gen.label}</span>
+                  </p>
+                  {isChosen && (
+                    <span
+                      className="text-xs px-2 py-0.5 rounded-full"
+                      style={{
+                        backgroundColor: "#BDCF7C",
+                        color: "#323B6A",
+                        fontFamily: "var(--font-poppins), Poppins, sans-serif",
+                        fontWeight: 600,
+                      }}
+                    >
+                      Selected
+                    </span>
+                  )}
+                </div>
 
-          {usedPrompt && (
-            <p className="text-xs px-1" style={{ color: "#A7B8D1" }}>
-              <span style={{ color: "#6F92BF", fontWeight: 600 }}>Prompt: </span>
-              {usedPrompt}
-            </p>
-          )}
+                {/* Image */}
+                <div
+                  className="rounded-xl overflow-hidden"
+                  style={{
+                    border: isChosen ? "2px solid #BDCF7C" : "1.5px solid #E7EDF3",
+                  }}
+                >
+                  {/* eslint-disable-next-line @next/next/no-img-element */}
+                  <img
+                    src={gen.imageUrl}
+                    alt={`AI-generated image — ${gen.label}`}
+                    className="w-full h-auto block"
+                  />
+                </div>
 
-          <div className="flex gap-2">
-            <button
-              onClick={handleDownload}
-              className="flex-1 py-2.5 rounded-xl text-sm transition-all duration-150 flex items-center justify-center gap-2"
-              style={{
-                backgroundColor: "#323B6A",
-                color: "#FFFFFF",
-                fontFamily: "var(--font-poppins), Poppins, sans-serif",
-                fontWeight: 600,
-              }}
-            >
-              <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
-                  d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
-              </svg>
-              Download PNG
-            </button>
-            <button
-              onClick={() => {
-                setStage("concepts");
-                setImageUrl(null);
-                setUsedPrompt(null);
-                setError(null);
-              }}
-              className="px-4 py-2.5 rounded-xl text-sm transition-all duration-150"
-              style={{
-                backgroundColor: "#E7EDF3",
-                color: "#323B6A",
-                fontFamily: "var(--font-poppins), Poppins, sans-serif",
-                fontWeight: 600,
-              }}
-              onMouseEnter={(e) => { (e.currentTarget as HTMLButtonElement).style.backgroundColor = "#D0DCE8"; }}
-              onMouseLeave={(e) => { (e.currentTarget as HTMLButtonElement).style.backgroundColor = "#E7EDF3"; }}
-            >
-              ← Try another
-            </button>
-          </div>
+                {/* Prompt */}
+                <p className="text-xs px-1 leading-relaxed" style={{ color: "#A7B8D1" }}>
+                  <span style={{ color: "#6F92BF", fontWeight: 600 }}>Prompt: </span>
+                  {gen.prompt}
+                </p>
+
+                {/* Action buttons */}
+                <div className="flex gap-2">
+                  {!isChosen && (
+                    <button
+                      onClick={() => setChosenIdx(idx)}
+                      className="px-4 py-2 rounded-xl text-sm transition-all duration-150"
+                      style={{
+                        backgroundColor: "#BDCF7C",
+                        color: "#323B6A",
+                        fontFamily: "var(--font-poppins), Poppins, sans-serif",
+                        fontWeight: 600,
+                      }}
+                      onMouseEnter={(e) => { (e.currentTarget as HTMLButtonElement).style.backgroundColor = "#AABD65"; }}
+                      onMouseLeave={(e) => { (e.currentTarget as HTMLButtonElement).style.backgroundColor = "#BDCF7C"; }}
+                    >
+                      Use this image
+                    </button>
+                  )}
+                  <button
+                    onClick={() => handleDownload(idx)}
+                    className="px-4 py-2 rounded-xl text-sm transition-all duration-150 flex items-center gap-1.5"
+                    style={{
+                      backgroundColor: isChosen ? "#323B6A" : "#E7EDF3",
+                      color: isChosen ? "#FFFFFF" : "#323B6A",
+                      fontFamily: "var(--font-poppins), Poppins, sans-serif",
+                      fontWeight: 600,
+                    }}
+                    onMouseEnter={(e) => {
+                      (e.currentTarget as HTMLButtonElement).style.backgroundColor = isChosen ? "#2A3260" : "#D0DCE8";
+                    }}
+                    onMouseLeave={(e) => {
+                      (e.currentTarget as HTMLButtonElement).style.backgroundColor = isChosen ? "#323B6A" : "#E7EDF3";
+                    }}
+                  >
+                    <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
+                        d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
+                    </svg>
+                    Download PNG
+                  </button>
+                </div>
+
+                {/* Divider between generations */}
+                {idx < generations.length - 1 && (
+                  <div style={{ borderTop: "1px solid #E7EDF3", marginTop: 8 }} />
+                )}
+              </div>
+            );
+          })}
+
+          {/* Try another concept */}
+          <button
+            onClick={() => {
+              setStage("concepts");
+              setGenerations([]);
+              setChosenIdx(0);
+              setRefinementInstruction("");
+              setError(null);
+            }}
+            className="text-xs transition-all duration-150"
+            style={{ color: "#A7B8D1" }}
+            onMouseEnter={(e) => { (e.currentTarget as HTMLButtonElement).style.color = "#323B6A"; }}
+            onMouseLeave={(e) => { (e.currentTarget as HTMLButtonElement).style.color = "#A7B8D1"; }}
+          >
+            ← Try another concept
+          </button>
         </div>
       )}
     </div>
