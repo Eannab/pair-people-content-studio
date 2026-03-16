@@ -9,6 +9,7 @@ import type { CVSettings } from "@/app/api/cv/settings/route";
 export const maxDuration = 60;
 
 const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
+const BATCH_SIZE = 20;
 
 // GET — return current CV index
 export async function GET() {
@@ -21,11 +22,13 @@ export async function GET() {
   }
 }
 
-// POST — rebuild the CV index from OneDrive
+// POST — process next batch of CVs from OneDrive
 export async function POST(request: NextRequest) {
   try {
     const body = await request.json().catch(() => ({}));
     const accessToken: string | undefined = body.accessToken;
+    // Files already attempted this scan session (client accumulates across batches)
+    const skipFileNames = new Set<string>((body.skipFileNames as string[]) ?? []);
 
     if (!accessToken) {
       return NextResponse.json({ error: "accessToken required" }, { status: 400 });
@@ -35,15 +38,11 @@ export async function POST(request: NextRequest) {
     const folderPath = settings?.folderPath?.trim() || "/Active CVs";
 
     // ── Pre-flight: verify the token is still valid ───────────────────────────
-    // A cheap /me call catches a stale token before we start scanning files.
-    // graphFetch throws GraphAuthError on 401, caught by the outer handler.
     {
       const meRes = await graphFetch(
         "https://graph.microsoft.com/v1.0/me?$select=id",
         accessToken
       );
-      // If Graph returns a non-401 error here (e.g. 403) it's a permissions
-      // issue — surface it immediately rather than failing later mid-scan.
       if (!meRes.ok) {
         const bodyText = await meRes.text().catch(() => "");
         let msg = `Graph API ${meRes.status}`;
@@ -57,27 +56,24 @@ export async function POST(request: NextRequest) {
     }
 
     // ── List files in the OneDrive folder ────────────────────────────────────
-    // Encode each path segment individually so slashes are preserved as
-    // separators and special characters (spaces, apostrophes, etc.) are safe.
     const encodedPath = folderPath
-      .replace(/^\/+/, "")           // strip leading slashes
+      .replace(/^\/+/, "")
       .split("/")
       .map((seg) => encodeURIComponent(seg))
       .join("/");
 
-    // $filter is not supported on /children — filter by file presence client-side.
-    // Paginate through all pages using @odata.nextLink.
-    type DriveItem = { id: string; name: string; file?: { mimeType: string } };
+    type DriveItem = {
+      id: string;
+      name: string;
+      file?: { mimeType: string };
+      lastModifiedDateTime?: string;
+    };
     const allItems: DriveItem[] = [];
     let nextUrl: string | null =
-      `https://graph.microsoft.com/v1.0/me/drive/root:/${encodedPath}:/children?$select=id,name,file&$top=200`;
+      `https://graph.microsoft.com/v1.0/me/drive/root:/${encodedPath}:/children?$select=id,name,file,lastModifiedDateTime&$top=200`;
 
     while (nextUrl) {
       const listRes = await graphFetch(nextUrl, accessToken);
-
-      // Read the body once as text so we can safely parse it as JSON without
-      // risking a thrown SyntaxError from a non-JSON error page (e.g. an Azure
-      // gateway returning "An error occurred…" as plain text).
       const bodyText = await listRes.text().catch(() => "");
 
       if (!listRes.ok) {
@@ -98,7 +94,6 @@ export async function POST(request: NextRequest) {
       try {
         listData = JSON.parse(bodyText);
       } catch {
-        // Graph returned a 2xx but with a non-JSON body (proxy/gateway error).
         const preview = bodyText.substring(0, 120).replace(/\s+/g, " ");
         return NextResponse.json(
           { error: `OneDrive returned an unexpected response: ${preview}` },
@@ -110,9 +105,7 @@ export async function POST(request: NextRequest) {
       nextUrl = listData["@odata.nextLink"] ?? null;
     }
 
-    // Only items that have a `file` facet are actual files (not folders).
     const files = allItems.filter((item) => item.file !== undefined);
-
     const cvFiles = files.filter((f) => {
       const name = f.name.toLowerCase();
       return name.endsWith(".pdf") || name.endsWith(".docx") || name.endsWith(".doc");
@@ -122,15 +115,53 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({
         candidates: [],
         count: 0,
+        batchProcessed: 0,
+        batchAttempted: [],
+        totalFiles: 0,
+        remainingFiles: 0,
+        done: true,
         message: `No PDF or DOCX files found in ${folderPath}`,
       });
     }
 
-    // ── Process each file ────────────────────────────────────────────────────
-    const now = new Date().toISOString();
-    const candidates: CVCandidate[] = [];
+    // ── Determine which files still need processing ───────────────────────────
+    // Load the current index so we can skip already-indexed, unmodified files.
+    const existingIndex = (await kv.get<CVCandidate[]>("cv:index")) ?? [];
+    const indexedMap = new Map(
+      existingIndex.map((c) => [c.fileName, c.fileModifiedAt ?? ""])
+    );
 
-    for (const file of cvFiles) {
+    const pendingFiles = cvFiles.filter((f) => {
+      // Client-side skip: file was attempted (and failed) earlier in this session
+      if (skipFileNames.has(f.name)) return false;
+      // Already indexed with the same modification date — nothing to do
+      const existingModified = indexedMap.get(f.name);
+      if (existingModified !== undefined && existingModified === (f.lastModifiedDateTime ?? "")) {
+        return false;
+      }
+      return true;
+    });
+
+    if (pendingFiles.length === 0) {
+      return NextResponse.json({
+        candidates: existingIndex,
+        count: existingIndex.length,
+        batchProcessed: 0,
+        batchAttempted: [],
+        totalFiles: cvFiles.length,
+        remainingFiles: 0,
+        done: true,
+      });
+    }
+
+    const batch = pendingFiles.slice(0, BATCH_SIZE);
+    const remainingAfterBatch = pendingFiles.length - batch.length;
+
+    // ── Process each file in the batch ────────────────────────────────────────
+    const now = new Date().toISOString();
+    const newCandidates: CVCandidate[] = [];
+
+    for (const file of batch) {
       try {
         const downloadRes = await graphFetch(
           `https://graph.microsoft.com/v1.0/me/drive/items/${file.id}/content`,
@@ -190,7 +221,7 @@ Return ONLY the JSON object.`,
 
         if (!extracted.name) continue;
 
-        candidates.push({
+        newCandidates.push({
           id: uuidv4(),
           name: extracted.name ?? file.name,
           currentRole: extracted.currentRole ?? "",
@@ -201,6 +232,7 @@ Return ONLY the JSON object.`,
           location: extracted.location ?? "",
           seniority: extracted.seniority ?? "mid",
           fileName: file.name,
+          fileModifiedAt: file.lastModifiedDateTime ?? "",
           indexedAt: now,
         });
       } catch (fileErr) {
@@ -209,9 +241,24 @@ Return ONLY the JSON object.`,
       }
     }
 
-    await kv.set("cv:index", candidates);
+    // ── Merge into existing index and persist ─────────────────────────────────
+    // Replace existing entries for files in this batch; append new ones.
+    const batchFileNames = new Set(batch.map((f) => f.name));
+    const mergedIndex = [
+      ...existingIndex.filter((c) => !batchFileNames.has(c.fileName)),
+      ...newCandidates,
+    ];
+    await kv.set("cv:index", mergedIndex);
 
-    return NextResponse.json({ candidates, count: candidates.length });
+    return NextResponse.json({
+      candidates: mergedIndex,
+      count: mergedIndex.length,
+      batchProcessed: newCandidates.length,
+      batchAttempted: batch.map((f) => f.name),
+      totalFiles: cvFiles.length,
+      remainingFiles: remainingAfterBatch,
+      done: remainingAfterBatch === 0,
+    });
   } catch (err) {
     console.error("cv/index POST error:", err);
     if (err instanceof GraphAuthError) {

@@ -36,6 +36,7 @@ function CVIntelligenceTab() {
   const [candidates, setCandidates] = useState<CVCandidate[]>([]);
   const [isLoading, setIsLoading] = useState(false);
   const [isScanning, setIsScanning] = useState(false);
+  const [scanProgress, setScanProgress] = useState<{ scanned: number; total: number } | null>(null);
   const [isSavingPath, setIsSavingPath] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [lastIndexed, setLastIndexed] = useState<string | null>(null);
@@ -98,36 +99,62 @@ function CVIntelligenceTab() {
     if (!session?.accessToken || session?.error === "RefreshAccessTokenError") return;
     setIsScanning(true);
     setError(null);
+    setScanProgress(null);
+
+    // Files attempted this session — sent back to server each iteration so
+    // unreadable files are not retried, preventing infinite loops.
+    const sessionSkipNames: string[] = [];
+
     try {
-      const res = await fetch("/api/cv/index", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ accessToken: session.accessToken }),
-      });
-      const bodyText = await res.text().catch(() => "");
-      let data: Record<string, unknown> = {};
-      try {
-        data = bodyText ? JSON.parse(bodyText) : {};
-      } catch {
-        // Non-JSON response (Vercel timeout HTML, gateway error, etc.)
-        const preview = bodyText.substring(0, 200).replace(/\s+/g, " ").trim();
-        throw new Error(
-          res.status === 504
-            ? "Scan timed out — your CV folder may be too large. Try reducing the number of files."
-            : `Server error (${res.status})${preview ? `: ${preview}` : ""}`
+      let done = false;
+      while (!done) {
+        const res = await fetch("/api/cv/index", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            accessToken: session.accessToken,
+            skipFileNames: sessionSkipNames,
+          }),
+        });
+
+        const bodyText = await res.text().catch(() => "");
+        let data: Record<string, unknown> = {};
+        try {
+          data = bodyText ? JSON.parse(bodyText) : {};
+        } catch {
+          const preview = bodyText.substring(0, 200).replace(/\s+/g, " ").trim();
+          throw new Error(
+            res.status === 504
+              ? "Scan timed out — click Scan CVs again to continue from where it left off."
+              : `Server error (${res.status})${preview ? `: ${preview}` : ""}`
+          );
+        }
+
+        if (res.status === 401 && data.tokenExpired) {
+          signIn("azure-ad");
+          return;
+        }
+        if (!res.ok) throw new Error((data.error as string) ?? "Scan failed");
+
+        // Accumulate attempted file names so the server skips them next batch
+        const attempted = (data.batchAttempted as string[]) ?? [];
+        sessionSkipNames.push(...attempted);
+
+        const totalFiles = (data.totalFiles as number) ?? 0;
+        const remainingFiles = (data.remainingFiles as number) ?? 0;
+        done = (data.done as boolean) ?? true;
+
+        setCandidates((data.candidates as CVCandidate[]) ?? []);
+        if ((data.count as number) > 0) setLastIndexed(new Date().toISOString());
+        setScanProgress(
+          totalFiles > 0 ? { scanned: totalFiles - remainingFiles, total: totalFiles } : null
         );
       }
-      if (res.status === 401 && data.tokenExpired) {
-        signIn("azure-ad");
-        return;
-      }
-      if (!res.ok) throw new Error((data.error as string) ?? "Scan failed");
-      setCandidates((data.candidates as CVCandidate[]) ?? []);
-      if ((data.candidates as CVCandidate[])?.length > 0) setLastIndexed(new Date().toISOString());
     } catch (err) {
       setError(err instanceof Error ? err.message : "Scan failed");
     } finally {
       setIsScanning(false);
+      setScanProgress(null);
     }
   };
 
@@ -219,7 +246,9 @@ function CVIntelligenceTab() {
                 <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
                 <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
               </svg>
-              Scanning CVs…
+              {scanProgress
+                ? `Scanning ${scanProgress.scanned} of ${scanProgress.total} files…`
+                : "Starting scan…"}
             </>
           ) : (
             <>

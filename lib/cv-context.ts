@@ -12,6 +12,7 @@ export interface CVCandidate {
   location: string;
   seniority: "junior" | "mid" | "senior" | "lead" | "principal";
   fileName: string;
+  fileModifiedAt?: string;
   indexedAt: string;
 }
 
