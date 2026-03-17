@@ -182,9 +182,10 @@ function CVIntelligenceTab() {
         done = (data.done as boolean) ?? false;
         const remaining = (data.remaining as number) ?? 0;
 
-        if (data.rateLimited) {
-          setEnrichProgress({ enriched: enrichedCount, total, processing: "Rate limited — waiting 30s…" });
-          await new Promise((resolve) => setTimeout(resolve, 30000));
+        const is429 = data.rateLimited || (typeof data.reason === "string" && data.reason.includes("429"));
+        if (is429) {
+          setEnrichProgress({ enriched: enrichedCount, total, processing: "Rate limited — waiting 60s…" });
+          await new Promise((resolve) => setTimeout(resolve, 60000));
           continue;
         }
 
@@ -198,7 +199,7 @@ function CVIntelligenceTab() {
         if (remaining === 0) done = true;
 
         if (!done && !stopEnrichRef.current) {
-          await new Promise((resolve) => setTimeout(resolve, 6000));
+          await new Promise((resolve) => setTimeout(resolve, 10000));
         }
       }
       await loadIndex();
