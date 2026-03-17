@@ -1590,8 +1590,26 @@ export default function BDPanel({ onCreatePost }: BDPanelProps) {
               if (lead) {
                 setLeads(freshLeads);
                 setSelectedLead(lead);
+                return;
               }
             } catch {}
+            // Not in bd:leads at all (expired TTL or manually added) — open brief with
+            // a stub so the button is never a no-op
+            setSelectedLead({
+              id: companyId ?? companyName,
+              companyName,
+              sector: "general",
+              signals: [],
+              australiaPresence: { basedInAustralia: false, hiringInAustralia: false, detail: "" },
+              overview: "",
+              techStack: [],
+              recentActivity: "",
+              relevanceScore: 5,
+              relevanceReason: "",
+              hiringContact: { name: "", title: "", linkedInUrl: "" },
+              confidence: "medium",
+              createdAt: new Date().toISOString(),
+            });
           }}
         />
       )}
