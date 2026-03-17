@@ -133,17 +133,24 @@ export async function POST() {
       }),
     });
 
+    if (claudeRes.status === 429) {
+      console.warn(`[cv/enrich] Claude 429 rate limit for ${candidate.fileName} — not marking error`);
+      return NextResponse.json({ rateLimited: true, remaining: countAfter });
+    }
+
     if (!claudeRes.ok) {
       const claudeErr = await claudeRes.text().catch(() => "");
       const reason = `Claude ${claudeRes.status}: ${claudeErr.substring(0, 150)}`;
       console.warn(`[cv/enrich] Claude failed for ${candidate.fileName}: ${reason}`);
-      indexRecord[candidate.id] = { ...candidate, enrichmentError: reason };
-      await kv.set("cv:index", indexRecord);
+      const kvKey = Object.keys(indexRecord).find((k) => indexRecord[k].fileName === candidate.fileName) ?? candidate.id;
+      indexRecord[kvKey] = { ...candidate, enrichmentError: reason };
+      await kv.set("cv:index", indexRecord, { ex: 60 * 60 * 24 * 30 });
       return NextResponse.json({ failed: candidate.fileName, reason, remaining: countAfter });
     }
 
     const claudeData = await claudeRes.json() as { content: { type: string; text: string }[] };
-    const raw = claudeData.content?.[0]?.type === "text" ? claudeData.content[0].text.trim() : "{}";
+    const rawText = claudeData.content?.[0]?.type === "text" ? claudeData.content[0].text.trim() : "{}";
+    const raw = rawText.replace(/```json\n?/g, "").replace(/```\n?/g, "").trim();
 
     try {
       extracted = JSON.parse(raw);

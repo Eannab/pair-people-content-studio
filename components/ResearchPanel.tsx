@@ -182,18 +182,23 @@ function CVIntelligenceTab() {
         done = (data.done as boolean) ?? false;
         const remaining = (data.remaining as number) ?? 0;
 
+        if (data.rateLimited) {
+          setEnrichProgress({ enriched: enrichedCount, total, processing: "Rate limited — waiting 30s…" });
+          await new Promise((resolve) => setTimeout(resolve, 30000));
+          continue;
+        }
+
         if (data.enriched) {
           enrichedCount++;
           setEnrichProgress({ enriched: enrichedCount, total, processing: data.enriched as string });
         } else if (data.skipped || data.failed) {
-          // skipped/failed: remaining already decremented in API, just update display
           setEnrichProgress({ enriched: enrichedCount, total, processing: (data.skipped ?? data.failed) as string });
         }
 
         if (remaining === 0) done = true;
 
         if (!done && !stopEnrichRef.current) {
-          await new Promise((resolve) => setTimeout(resolve, 3000));
+          await new Promise((resolve) => setTimeout(resolve, 6000));
         }
       }
       await loadIndex();
