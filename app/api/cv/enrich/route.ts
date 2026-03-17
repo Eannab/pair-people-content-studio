@@ -29,6 +29,7 @@ export async function GET() {
 
 // POST — enrich one candidate at a time
 export async function POST() {
+  console.log("[cv/enrich] POST handler called");
   const session = await getServerSession(authOptions);
   if (!session?.accessToken) {
     return NextResponse.json(
@@ -40,6 +41,7 @@ export async function POST() {
 
   const indexRecord = (await kv.get<Record<string, CVCandidate>>("cv:index")) ?? {};
   const all = Object.values(indexRecord);
+  console.log(`[cv/enrich] cv:index type=${Array.isArray(indexRecord) ? "array" : typeof indexRecord} total=${all.length} unenriched=${all.filter((c) => c.enriched !== true).length}`);
 
   // Find first unenriched, non-skipped, non-errored candidate
   const candidate = all.find(
