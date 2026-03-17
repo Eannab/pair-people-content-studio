@@ -67,7 +67,7 @@ export async function POST() {
       );
     }
 
-    const relevant = articles.filter((a) => a.topScore >= 5);
+    const relevant = articles.filter((a) => a.topScore >= 4);
     if (relevant.length === 0) {
       return NextResponse.json({ leads: [], marketInsights: [], detected: 0 });
     }
