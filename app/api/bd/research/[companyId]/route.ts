@@ -10,6 +10,8 @@ const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
 async function braveSearch(query: string): Promise<string> {
   const apiKey = process.env.BRAVE_SEARCH_API_KEY;
   if (!apiKey) return "";
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 10000);
   try {
     const res = await fetch(
       `https://api.search.brave.com/res/v1/web/search?q=${encodeURIComponent(query)}&count=5`,
@@ -19,6 +21,7 @@ async function braveSearch(query: string): Promise<string> {
           "Accept-Encoding": "gzip",
           "X-Subscription-Token": apiKey,
         },
+        signal: controller.signal,
       }
     );
     if (!res.ok) return "";
@@ -33,6 +36,8 @@ async function braveSearch(query: string): Promise<string> {
     return snippets;
   } catch {
     return "";
+  } finally {
+    clearTimeout(timeout);
   }
 }
 

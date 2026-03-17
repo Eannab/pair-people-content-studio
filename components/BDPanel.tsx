@@ -134,10 +134,12 @@ function AUPresenceTag({
 interface LeadCardProps {
   lead: BDLead;
   isResearching: boolean;
+  hasFailed: boolean;
   onView: () => void;
+  onRetry: () => void;
 }
 
-function LeadCard({ lead, isResearching, onView }: LeadCardProps) {
+function LeadCard({ lead, isResearching, hasFailed, onView, onRetry }: LeadCardProps) {
   const isResearched = !!lead.researchedAt;
   const ap = lead.australiaPresence;
 
@@ -237,24 +239,43 @@ function LeadCard({ lead, isResearching, onView }: LeadCardProps) {
         </>
       )}
 
-      {!isResearched && !isResearching && (
+      {!isResearched && isResearching && (
         <p className="text-xs" style={{ color: "#A7B8D1" }}>
-          Researching company...
+          Researching company…
+        </p>
+      )}
+
+      {!isResearched && hasFailed && !isResearching && (
+        <p className="text-xs" style={{ color: "#CC4444" }}>
+          Research failed — click to retry
+        </p>
+      )}
+
+      {!isResearched && !isResearching && !hasFailed && (
+        <p className="text-xs" style={{ color: "#A7B8D1" }}>
+          Queued for research…
         </p>
       )}
 
       <button
-        onClick={onView}
-        disabled={!isResearched}
+        onClick={hasFailed && !isResearched ? onRetry : onView}
+        disabled={isResearching || (!isResearched && !hasFailed)}
         className="w-full py-2.5 rounded-xl text-sm font-semibold transition-all mt-1"
         style={{
-          backgroundColor: isResearched ? "#BDCF7C" : "#E7EDF3",
-          color: isResearched ? "#323B6A" : "#A7B8D1",
+          backgroundColor: isResearched ? "#BDCF7C" : hasFailed ? "#FFF0F0" : "#E7EDF3",
+          color: isResearched ? "#323B6A" : hasFailed ? "#CC4444" : "#A7B8D1",
           fontFamily: "var(--font-poppins), Poppins, sans-serif",
-          cursor: isResearched ? "pointer" : "not-allowed",
+          cursor: isResearched || hasFailed ? "pointer" : "not-allowed",
+          border: hasFailed && !isResearched ? "1px solid #FFCCCC" : "none",
         }}
       >
-        {isResearched ? "View Brief →" : "Researching..."}
+        {isResearching
+          ? "Researching…"
+          : isResearched
+          ? "View Brief →"
+          : hasFailed
+          ? "Retry Research"
+          : "Researching…"}
       </button>
     </div>
   );
@@ -1539,6 +1560,7 @@ export default function BDPanel({ onCreatePost }: BDPanelProps) {
   const [leads, setLeads] = useState<BDLead[]>([]);
   const [marketInsights, setMarketInsights] = useState<MarketInsightSignal[]>([]);
   const [researchingIds, setResearchingIds] = useState<Set<string>>(new Set());
+  const [failedIds, setFailedIds] = useState<Set<string>>(new Set());
   const [isDetecting, setIsDetecting] = useState(false);
   const [detectError, setDetectError] = useState<string | null>(null);
   const [selectedLead, setSelectedLead] = useState<BDLead | null>(null);
@@ -1565,6 +1587,8 @@ export default function BDPanel({ onCreatePost }: BDPanelProps) {
 
   const researchLead = async (lead: BDLead) => {
     setResearchingIds((prev) => new Set(prev).add(lead.id));
+    // Clear any prior failure so the spinner shows while retrying
+    setFailedIds((prev) => { const next = new Set(prev); next.delete(lead.id); return next; });
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), 55000);
     try {
@@ -1574,11 +1598,14 @@ export default function BDPanel({ onCreatePost }: BDPanelProps) {
         body: JSON.stringify({ companyName: lead.companyName }),
         signal: controller.signal,
       });
-      if (!res.ok) return;
+      if (!res.ok) {
+        setFailedIds((prev) => new Set(prev).add(lead.id));
+        return;
+      }
       const data = await res.json();
       setLeads((prev) => prev.map((l) => (l.id === lead.id ? data.lead : l)));
     } catch {
-      // Research failed or timed out — keep partial lead
+      setFailedIds((prev) => new Set(prev).add(lead.id));
     } finally {
       clearTimeout(timeout);
       setResearchingIds((prev) => {
@@ -1606,8 +1633,13 @@ export default function BDPanel({ onCreatePost }: BDPanelProps) {
       setMarketInsights(newInsights);
       setLastDetected(new Date().toISOString());
 
-      // Auto-research all BD leads in parallel
-      newLeads.forEach((lead) => researchLead(lead));
+      // Auto-research all BD leads, staggered 2s apart to avoid hammering the API
+      (async () => {
+        for (let i = 0; i < newLeads.length; i++) {
+          if (i > 0) await new Promise<void>((resolve) => setTimeout(resolve, 2000));
+          researchLead(newLeads[i]);
+        }
+      })();
     } catch (err) {
       setDetectError(err instanceof Error ? err.message : "Detection failed");
     } finally {
@@ -1849,7 +1881,9 @@ export default function BDPanel({ onCreatePost }: BDPanelProps) {
                     key={lead.id}
                     lead={lead}
                     isResearching={researchingIds.has(lead.id)}
+                    hasFailed={failedIds.has(lead.id)}
                     onView={() => setSelectedLead(lead)}
+                    onRetry={() => researchLead(lead)}
                   />
                 ))}
               </div>
