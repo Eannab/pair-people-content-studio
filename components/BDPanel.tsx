@@ -532,7 +532,11 @@ type Channel = "email" | "linkedin" | "text";
 function LeadDetail({ lead, onBack, onLeadUpdate }: LeadDetailProps) {
   const [channel, setChannel] = useState<Channel>("email");
   const [drafts, setDrafts] = useState<Record<string, string>>({});
+  const [subjects, setSubjects] = useState<Record<string, string>>({});
   const [followUps, setFollowUps] = useState<Record<string, string>>({});
+  const [followUpSubjects, setFollowUpSubjects] = useState<Record<string, string>>({});
+  const [altSubjects, setAltSubjects] = useState<string[]>([]);
+  const [isGeneratingAltSubjects, setIsGeneratingAltSubjects] = useState(false);
   const [activeDraftType, setActiveDraftType] = useState<"candidate" | "intro">("candidate");
   const [isDrafting, setIsDrafting] = useState(false);
   const [isDraftingFollowUp, setIsDraftingFollowUp] = useState(false);
@@ -545,8 +549,12 @@ function LeadDetail({ lead, onBack, onLeadUpdate }: LeadDetailProps) {
 
   const activeKey = `${channel}:${activeDraftType}`;
   const activeDraft = drafts[activeKey] ?? "";
+  const activeSubject = subjects[activeKey] ?? "";
   const followUpDraft = followUps[activeKey] ?? "";
+  const followUpSubject = followUpSubjects[activeKey] ?? "";
   const setActiveDraft = (val: string) => setDrafts((d) => ({ ...d, [activeKey]: val }));
+  const setActiveSubject = (val: string) => setSubjects((s) => ({ ...s, [activeKey]: val }));
+  const setFollowUpSubject = (val: string) => setFollowUpSubjects((s) => ({ ...s, [activeKey]: val }));
   const ap = lead.australiaPresence;
 
   // Load saved email drafts on mount
@@ -601,6 +609,7 @@ function LeadDetail({ lead, onBack, onLeadUpdate }: LeadDetailProps) {
       if (!res.ok) throw new Error("Draft generation failed");
       const data = await res.json();
       setDrafts((d) => ({ ...d, [key]: data.draft }));
+      if (data.subject) setSubjects((s) => ({ ...s, [key]: data.subject }));
       if (type === "candidate" && data.cvMatches?.length > 0) {
         setCandidateMatches(data.cvMatches);
         setActiveCandidateIndex(candidateIndex);
@@ -625,6 +634,7 @@ function LeadDetail({ lead, onBack, onLeadUpdate }: LeadDetailProps) {
       if (!res.ok) throw new Error("Follow-up generation failed");
       const data = await res.json();
       setFollowUps((f) => ({ ...f, [key]: data.draft }));
+      if (data.subject) setFollowUpSubjects((s) => ({ ...s, [key]: data.subject }));
     } catch {
       // silent — user can retry
     } finally {
@@ -632,15 +642,40 @@ function LeadDetail({ lead, onBack, onLeadUpdate }: LeadDetailProps) {
     }
   };
 
+  const generateAltSubjects = async () => {
+    setIsGeneratingAltSubjects(true);
+    setAltSubjects([]);
+    try {
+      const res = await fetch(`/api/bd/draft/${lead.id}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ type: activeDraftType, channel, subjectsOnly: true }),
+      });
+      if (!res.ok) throw new Error();
+      const data = await res.json();
+      if (Array.isArray(data.subjects)) setAltSubjects(data.subjects);
+    } catch {
+      // silent
+    } finally {
+      setIsGeneratingAltSubjects(false);
+    }
+  };
+
   const copyDraft = () => {
-    navigator.clipboard.writeText(activeDraft).then(() => {
+    const text = activeSubject && channel !== "text"
+      ? `Subject: ${activeSubject}\n\n${activeDraft}`
+      : activeDraft;
+    navigator.clipboard.writeText(text).then(() => {
       setCopied(true);
       setTimeout(() => setCopied(false), 2000);
     });
   };
 
   const copyFollowUp = () => {
-    navigator.clipboard.writeText(followUpDraft).then(() => {
+    const text = followUpSubject && channel !== "text"
+      ? `Subject: ${followUpSubject}\n\n${followUpDraft}`
+      : followUpDraft;
+    navigator.clipboard.writeText(text).then(() => {
       setCopiedFollowUp(true);
       setTimeout(() => setCopiedFollowUp(false), 2000);
     });
@@ -1107,6 +1142,84 @@ function LeadDetail({ lead, onBack, onLeadUpdate }: LeadDetailProps) {
           </div>
         )}
 
+        {/* Subject line (email + linkedin only) */}
+        {channel !== "text" && activeDraft && (
+          <div className="mb-3">
+            <div className="flex items-center gap-2 mb-1.5">
+              <p className="text-xs font-semibold uppercase tracking-wider flex-1" style={{ color: "#A7B8D1", fontFamily: "var(--font-poppins), Poppins, sans-serif" }}>
+                Subject
+              </p>
+              <button
+                onClick={() => { setAltSubjects([]); generateAltSubjects(); }}
+                disabled={isGeneratingAltSubjects}
+                className="flex items-center gap-1 text-xs px-2.5 py-1 rounded-lg transition-all"
+                style={{
+                  backgroundColor: isGeneratingAltSubjects ? "#E7EDF3" : "#F4F6FA",
+                  color: isGeneratingAltSubjects ? "#A7B8D1" : "#6F92BF",
+                  fontFamily: "var(--font-poppins), Poppins, sans-serif",
+                  fontWeight: 600,
+                  cursor: isGeneratingAltSubjects ? "not-allowed" : "pointer",
+                  border: "1.5px solid #E7EDF3",
+                }}
+              >
+                {isGeneratingAltSubjects ? (
+                  <>
+                    <svg className="w-3 h-3 animate-spin" fill="none" viewBox="0 0 24 24">
+                      <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                      <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+                    </svg>
+                    Generating...
+                  </>
+                ) : "Regenerate subject"}
+              </button>
+            </div>
+            <input
+              type="text"
+              value={activeSubject}
+              onChange={(e) => setActiveSubject(e.target.value)}
+              placeholder="Subject line will appear here after generating"
+              className="w-full px-4 py-2.5 rounded-xl text-sm outline-none transition-all"
+              style={{
+                border: "1.5px solid #E7EDF3",
+                color: "#323B6A",
+                backgroundColor: "#FAFBFC",
+                fontFamily: "inherit",
+              }}
+              onFocus={(e) => { e.currentTarget.style.borderColor = "#BDCF7C"; }}
+              onBlur={(e) => { e.currentTarget.style.borderColor = "#E7EDF3"; }}
+            />
+            {/* Alternative subjects picker */}
+            {altSubjects.length > 0 && (
+              <div className="mt-2 flex flex-col gap-1.5">
+                {altSubjects.map((s, i) => (
+                  <button
+                    key={i}
+                    onClick={() => { setActiveSubject(s); setAltSubjects([]); }}
+                    className="text-left text-xs px-3 py-2 rounded-lg transition-all"
+                    style={{
+                      backgroundColor: "#F4F6FA",
+                      color: "#323B6A",
+                      border: "1.5px solid #E7EDF3",
+                      fontFamily: "inherit",
+                    }}
+                    onMouseEnter={(e) => { (e.currentTarget as HTMLButtonElement).style.backgroundColor = "#E7EDF3"; }}
+                    onMouseLeave={(e) => { (e.currentTarget as HTMLButtonElement).style.backgroundColor = "#F4F6FA"; }}
+                  >
+                    {s}
+                  </button>
+                ))}
+                <button
+                  onClick={() => setAltSubjects([])}
+                  className="text-xs self-start"
+                  style={{ color: "#A7B8D1" }}
+                >
+                  Dismiss
+                </button>
+              </div>
+            )}
+          </div>
+        )}
+
         {activeDraft ? (
           <textarea
             value={activeDraft}
@@ -1185,20 +1298,39 @@ function LeadDetail({ lead, onBack, onLeadUpdate }: LeadDetailProps) {
               </div>
             </div>
             {followUpDraft && (
-              <textarea
-                value={followUpDraft}
-                onChange={(e) => setFollowUps((f) => ({ ...f, [activeKey]: e.target.value }))}
-                rows={channel === "email" ? 5 : 2}
-                className="w-full px-4 py-3 rounded-xl text-sm outline-none resize-none transition-all"
-                style={{
-                  border: "1.5px solid #E7EDF3",
-                  color: "#323B6A",
-                  backgroundColor: "#FAFBFC",
-                  lineHeight: "1.6",
-                }}
-                onFocus={(e) => { e.currentTarget.style.borderColor = "#6F92BF"; }}
-                onBlur={(e) => { e.currentTarget.style.borderColor = "#E7EDF3"; }}
-              />
+              <div className="flex flex-col gap-2">
+                {channel !== "text" && (
+                  <input
+                    type="text"
+                    value={followUpSubject}
+                    onChange={(e) => setFollowUpSubject(e.target.value)}
+                    placeholder="Follow-up subject"
+                    className="w-full px-4 py-2.5 rounded-xl text-sm outline-none transition-all"
+                    style={{
+                      border: "1.5px solid #E7EDF3",
+                      color: "#323B6A",
+                      backgroundColor: "#FAFBFC",
+                      fontFamily: "inherit",
+                    }}
+                    onFocus={(e) => { e.currentTarget.style.borderColor = "#6F92BF"; }}
+                    onBlur={(e) => { e.currentTarget.style.borderColor = "#E7EDF3"; }}
+                  />
+                )}
+                <textarea
+                  value={followUpDraft}
+                  onChange={(e) => setFollowUps((f) => ({ ...f, [activeKey]: e.target.value }))}
+                  rows={channel === "email" ? 5 : 2}
+                  className="w-full px-4 py-3 rounded-xl text-sm outline-none resize-none transition-all"
+                  style={{
+                    border: "1.5px solid #E7EDF3",
+                    color: "#323B6A",
+                    backgroundColor: "#FAFBFC",
+                    lineHeight: "1.6",
+                  }}
+                  onFocus={(e) => { e.currentTarget.style.borderColor = "#6F92BF"; }}
+                  onBlur={(e) => { e.currentTarget.style.borderColor = "#E7EDF3"; }}
+                />
+              </div>
             )}
           </div>
         )}

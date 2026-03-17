@@ -53,12 +53,14 @@ export async function POST(
       candidateIndex?: number;
       followUp?: boolean;
       originalMessage?: string;
+      subjectsOnly?: boolean;
     };
 
     const type: DraftType = body.type ?? "candidate";
     const channel: Channel = body.channel ?? "email";
     const candidateIndex = Math.max(0, body.candidateIndex ?? 0);
     const isFollowUp = body.followUp ?? false;
+    const isSubjectsOnly = body.subjectsOnly ?? false;
     const originalMessage = body.originalMessage ?? "";
 
     const [leads, preferences, outreachVoiceContext] = await Promise.all([
@@ -132,6 +134,43 @@ export async function POST(
 - Sector: ${lead.sector}${hiringRole ? `\n- Open role: ${hiringRole}` : ""}${growthSignal ? `\n- Growth signal: ${growthSignal}` : ""}
 - Recent activity: ${lead.recentActivity || ""}`;
 
+    // ── Subjects-only path (3 alternatives) ──────────────────────────────────
+    if (isSubjectsOnly && channel !== "text") {
+      const subjectContext = `Company: ${lead.companyName}
+Signal: ${hookContext || lead.signals.map((s) => s.label).join(", ")}
+What they build: ${lead.overview || `${lead.companyName} — a ${lead.sector} company`}
+${type === "candidate" ? `Candidate type: ${candidateBlock.split("\n")[0] ?? ""}` : "Intro to Pair People — no candidate"}`;
+
+      const subjectResponse = await anthropic.messages.create({
+        model: "claude-sonnet-4-20250514",
+        max_tokens: 150,
+        messages: [{
+          role: "user",
+          content: `Generate 3 alternative subject lines for a ${channel === "linkedin" ? "LinkedIn InMail" : "cold outreach email"} from Éanna (co-founder, Pair People) to the hiring contact at ${lead.companyName}.
+
+${subjectContext}
+
+Rules:
+- Each subject: 5-8 words max
+- Curiosity-driven, references the company's signal or product
+- Conversational, peer-to-peer — not salesy or formal
+- Vary the angle across the 3 options
+- Examples: "Saw your Series A — got someone for you", "Re: your Sydney engineering team", "Quick one on your hiring plans"
+
+Return ONLY a JSON array of 3 strings: ["subject 1","subject 2","subject 3"]`,
+        }],
+      });
+
+      const raw = subjectResponse.content[0].type === "text" ? subjectResponse.content[0].text.trim() : "[]";
+      try {
+        const clean = raw.replace(/^```(?:json)?\n?/, "").replace(/\n?```$/, "");
+        const subjects = JSON.parse(clean) as string[];
+        return NextResponse.json({ subjects });
+      } catch {
+        return NextResponse.json({ subjects: [] });
+      }
+    }
+
     // ── Dispatch to prompt builder ────────────────────────────────────────────
     let promptContent: string;
     let maxTokens: number;
@@ -153,13 +192,26 @@ export async function POST(
       messages: [{ role: "user", content: promptContent }],
     });
 
-    const draft = response.content[0].type === "text" ? response.content[0].text.trim() : "";
+    const raw = response.content[0].type === "text" ? response.content[0].text.trim() : "";
+    let draft = raw;
+    let subject = "";
+
+    if (channel !== "text") {
+      try {
+        const clean = raw.replace(/^```(?:json)?\n?/, "").replace(/\n?```$/, "");
+        const parsed = JSON.parse(clean) as { subject?: string; body?: string };
+        draft = parsed.body ?? raw;
+        subject = parsed.subject ?? "";
+      } catch {
+        // fall back to treating raw as the body
+      }
+    }
 
     await kv.set(draftKey(user.email, companyId, type, channel), draft, {
       ex: 60 * 60 * 24 * 30,
     });
 
-    return NextResponse.json({ draft, cvMatches, type, channel });
+    return NextResponse.json({ draft, subject, cvMatches, type, channel });
   } catch (err) {
     console.error("bd/draft error:", err);
     return NextResponse.json(
@@ -224,7 +276,9 @@ CONFIDENTIALITY: Never use the candidate's name in the email. Refer to them by r
 
 9. SIGN OFF: "Cheers, Éanna" — nothing else.
 
-Return ONLY the email body text. No subject line.`,
+SUBJECT LINE: Write a punchy, curiosity-driven subject (5-8 words). Reference the company's signal or what they build. Examples: "Saw your Series A — got someone for you", "Re: your Sydney engineering team", "Quick one on your hiring plans". Conversational, never salesy.
+
+Return ONLY a JSON object (no markdown fences): {"subject":"<subject line>","body":"<email body>"}`,
     };
   }
 
@@ -262,7 +316,9 @@ STRICT RULES:
 
 6. SIGN OFF: "Cheers, Éanna" — no title, no phone, no website.
 
-Return ONLY the email body text. No subject line.`,
+SUBJECT LINE: Write a punchy, curiosity-driven subject (5-8 words). Reference the company's signal or what they build. Examples: "Saw your Series A — got someone for you", "Re: your Sydney engineering team", "Quick one on your hiring plans". Conversational, never salesy.
+
+Return ONLY a JSON object (no markdown fences): {"subject":"<subject line>","body":"<email body>"}`,
     };
   }
 
@@ -286,8 +342,9 @@ RULES:
 - No bullet points
 - No formal sign-off (no "Cheers, Éanna") — keep it informal
 - CONFIDENTIALITY: never include the candidate's name
+- SUBJECT LINE: 5-8 words, curiosity-driven, references the signal. E.g. "Saw your Series A — got someone for you"
 
-Return ONLY the message text.`,
+Return ONLY a JSON object (no markdown fences): {"subject":"<subject line>","body":"<message text>"}`,
     };
   }
 
@@ -314,8 +371,9 @@ RULES:
 - Short CTA: "Worth a quick chat?"
 - Conversational peer tone — no sales language
 - No bullet points, no formal sign-off
+- SUBJECT LINE: 5-8 words, curiosity-driven, references the signal. E.g. "Re: your Sydney engineering team"
 
-Return ONLY the message text.`,
+Return ONLY a JSON object (no markdown fences): {"subject":"<subject line>","body":"<message text>"}`,
     };
   }
 
@@ -388,8 +446,9 @@ RULES:
 3. Acknowledge they may be busy — keep the tone warm not pushy
 4. Same sign-off: "Cheers, Éanna"
 5. 75-100 words total
+6. SUBJECT LINE: A "Re:" follow-up subject, 4-6 words. E.g. "Re: my note last week"
 
-Return ONLY the email body text. No subject line.`,
+Return ONLY a JSON object (no markdown fences): {"subject":"<subject line>","body":"<email body>"}`,
     };
   }
 
@@ -403,8 +462,9 @@ ${originalMessage}
 ${confidentialityNote}
 Write a casual, friendly nudge in the style of: "Hey ${firstName}, just bumping this — [brief one-line reminder of value]. Happy to chat if timing works."
 One or two sentences maximum. Very conversational. No formality.
+SUBJECT LINE: Short follow-up subject, 3-5 words. E.g. "Just bumping this"
 
-Return ONLY the message text.`,
+Return ONLY a JSON object (no markdown fences): {"subject":"<subject line>","body":"<message text>"}`,
     };
   }
 
