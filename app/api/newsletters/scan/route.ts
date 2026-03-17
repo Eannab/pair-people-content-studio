@@ -394,68 +394,68 @@ export async function POST() {
     // 9. BD signal detection on articles scoring >= 4
     let leadsAdded = 0;
     let insightsAdded = 0;
+    let bdDetectionSkipped = false;
 
-    if (relevantArticles.length > 0) {
-      let detectedLeads: BDLead[] = [];
-      let detectedInsights: MarketInsightSignal[] = [];
-      try {
-        ({ bdLeads: detectedLeads, marketInsights: detectedInsights } =
-          await detectBDSignals(relevantArticles));
-      } catch (err) {
-        console.error("[newsletters/scan] detectBDSignals failed — articles saved, leads skipped:", err);
-      }
+    try {
+      if (relevantArticles.length > 0) {
+        const { bdLeads: detectedLeads, marketInsights: detectedInsights } =
+          await detectBDSignals(relevantArticles);
 
-      // Merge BD leads
-      let existingLeads: BDLead[] = [];
-      try { existingLeads = (await kv.get<BDLead[]>("bd:leads")) ?? []; } catch {}
-      const existingLeadNames = new Set(existingLeads.map((l) => l.companyName.toLowerCase()));
-      const newLeads = detectedLeads.filter(
-        (l) => !existingLeadNames.has(l.companyName.toLowerCase())
-      );
-      if (newLeads.length > 0) {
-        try {
-          await kv.set("bd:leads", [...existingLeads, ...newLeads], { ex: 60 * 60 * 24 * 30 });
-        } catch {}
-        try {
-          const existingPipeline =
-            (await kv.get<Array<{ id: string; companyName: string }>>("bd:pipeline")) ?? [];
-          const pipelineNames = new Set(existingPipeline.map((p) => p.companyName.toLowerCase()));
-          const newPipelineEntries = newLeads
-            .filter((l) => !pipelineNames.has(l.companyName.toLowerCase()))
-            .map((l) => ({
-              id: uuidv4(),
-              companyId: l.id,
-              companyName: l.companyName,
-              sector: l.sector,
-              signals: l.signals,
-              relevanceScore: l.relevanceScore,
-              dateAdded: now,
-              status: "new" as const,
-              notes: "",
-              updatedAt: now,
-            }));
-          if (newPipelineEntries.length > 0) {
-            await kv.set("bd:pipeline", [...existingPipeline, ...newPipelineEntries]);
-          }
-        } catch {}
-        leadsAdded = newLeads.length;
-      }
+        // Merge BD leads
+        let existingLeads: BDLead[] = [];
+        try { existingLeads = (await kv.get<BDLead[]>("bd:leads")) ?? []; } catch {}
+        const existingLeadNames = new Set(existingLeads.map((l) => l.companyName.toLowerCase()));
+        const newLeads = detectedLeads.filter(
+          (l) => !existingLeadNames.has(l.companyName.toLowerCase())
+        );
+        if (newLeads.length > 0) {
+          try {
+            await kv.set("bd:leads", [...existingLeads, ...newLeads], { ex: 60 * 60 * 24 * 30 });
+          } catch {}
+          try {
+            const existingPipeline =
+              (await kv.get<Array<{ id: string; companyName: string }>>("bd:pipeline")) ?? [];
+            const pipelineNames = new Set(existingPipeline.map((p) => p.companyName.toLowerCase()));
+            const newPipelineEntries = newLeads
+              .filter((l) => !pipelineNames.has(l.companyName.toLowerCase()))
+              .map((l) => ({
+                id: uuidv4(),
+                companyId: l.id,
+                companyName: l.companyName,
+                sector: l.sector,
+                signals: l.signals,
+                relevanceScore: l.relevanceScore,
+                dateAdded: now,
+                status: "new" as const,
+                notes: "",
+                updatedAt: now,
+              }));
+            if (newPipelineEntries.length > 0) {
+              await kv.set("bd:pipeline", [...existingPipeline, ...newPipelineEntries]);
+            }
+          } catch {}
+          leadsAdded = newLeads.length;
+        }
 
-      // Merge market insights
-      let existingInsights: MarketInsightSignal[] = [];
-      try { existingInsights = (await kv.get<MarketInsightSignal[]>("bd:market_insights")) ?? []; } catch {}
-      const existingInsightNames = new Set(existingInsights.map((i) => i.companyName.toLowerCase()));
-      const newInsights = detectedInsights.filter(
-        (i) => !existingInsightNames.has(i.companyName.toLowerCase())
-      );
-      if (newInsights.length > 0) {
-        try {
-          await kv.set("bd:market_insights", [...existingInsights, ...newInsights], {
-            ex: 60 * 60 * 24 * 30,
-          });
-        } catch {}
-        insightsAdded = newInsights.length;
+        // Merge market insights
+        let existingInsights: MarketInsightSignal[] = [];
+        try { existingInsights = (await kv.get<MarketInsightSignal[]>("bd:market_insights")) ?? []; } catch {}
+        const existingInsightNames = new Set(existingInsights.map((i) => i.companyName.toLowerCase()));
+        const newInsights = detectedInsights.filter(
+          (i) => !existingInsightNames.has(i.companyName.toLowerCase())
+        );
+        if (newInsights.length > 0) {
+          try {
+            await kv.set("bd:market_insights", [...existingInsights, ...newInsights], {
+              ex: 60 * 60 * 24 * 30,
+            });
+          } catch {}
+          insightsAdded = newInsights.length;
+        }
       }
+    } catch (err) {
+      console.error("[newsletters/scan] BD detection failed — returning articles without leads:", err);
+      bdDetectionSkipped = true;
     }
 
     return NextResponse.json({
@@ -465,6 +465,7 @@ export async function POST() {
       emailsMatched: matching.length,
       leadsAdded,
       insightsAdded,
+      ...(bdDetectionSkipped ? { bdDetectionSkipped: true } : {}),
     });
   } catch (err) {
     console.error("newsletters/scan error:", err);

@@ -438,12 +438,15 @@ function MarketInsightTab({
         signIn("azure-ad");
         return;
       }
-      if (!res.ok) throw new Error(data.error);
-
-      setArticles(data.articles ?? []);
-      setScannedAt(data.scannedAt);
-      setScanMeta({ checked: data.emailsChecked, matched: data.emailsMatched });
-      setScanState("done");
+      // Treat as success if articles came back — BD detection failure shouldn't block the UI
+      if (data.articles?.length >= 0 && data.scannedAt) {
+        setArticles(data.articles ?? []);
+        setScannedAt(data.scannedAt);
+        setScanMeta({ checked: data.emailsChecked, matched: data.emailsMatched });
+        setScanState("done");
+        return;
+      }
+      if (!res.ok) throw new Error(data.error ?? "Scan failed");
     } catch (err) {
       setScanError(err instanceof Error ? err.message : "Scan failed");
       setScanState("error");
