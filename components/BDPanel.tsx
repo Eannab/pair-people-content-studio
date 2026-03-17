@@ -506,21 +506,30 @@ interface LeadDetailProps {
 }
 
 function LeadDetail({ lead, onBack, onLeadUpdate }: LeadDetailProps) {
-  const [draft, setDraft] = useState("");
+  const [candidateDraft, setCandidateDraft] = useState("");
+  const [introDraft, setIntroDraft] = useState("");
+  const [activeDraftType, setActiveDraftType] = useState<"candidate" | "intro">("candidate");
   const [isDrafting, setIsDrafting] = useState(false);
   const [draftError, setDraftError] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
   const [isResearching, setIsResearching] = useState(false);
+
+  const activeDraft = activeDraftType === "candidate" ? candidateDraft : introDraft;
+  const setActiveDraft = (val: string) => {
+    if (activeDraftType === "candidate") setCandidateDraft(val);
+    else setIntroDraft(val);
+  };
   const ap = lead.australiaPresence;
 
-  // Load the user's saved draft on mount
+  // Load both saved drafts on mount
   React.useEffect(() => {
-    fetch(`/api/bd/draft/${lead.id}`)
-      .then((r) => r.json())
-      .then((data) => {
-        if (data.draft) setDraft(data.draft);
-      })
-      .catch(() => {});
+    Promise.all([
+      fetch(`/api/bd/draft/${lead.id}`).then((r) => r.json()).catch(() => ({})),
+      fetch(`/api/bd/draft/${lead.id}?type=intro`).then((r) => r.json()).catch(() => ({})),
+    ]).then(([cData, iData]) => {
+      if (cData.draft) setCandidateDraft(cData.draft);
+      if (iData.draft) setIntroDraft(iData.draft);
+    });
   }, [lead.id]);
 
   // Auto-trigger research if brief is empty
@@ -547,14 +556,20 @@ function LeadDetail({ lead, onBack, onLeadUpdate }: LeadDetailProps) {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [lead.id]);
 
-  const generateDraft = async () => {
+  const generateDraft = async (type: "candidate" | "intro") => {
+    setActiveDraftType(type);
     setIsDrafting(true);
     setDraftError(null);
     try {
-      const res = await fetch(`/api/bd/draft/${lead.id}`, { method: "POST" });
+      const res = await fetch(`/api/bd/draft/${lead.id}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ type }),
+      });
       if (!res.ok) throw new Error("Draft generation failed");
       const data = await res.json();
-      setDraft(data.draft);
+      if (type === "candidate") setCandidateDraft(data.draft);
+      else setIntroDraft(data.draft);
     } catch (err) {
       setDraftError(err instanceof Error ? err.message : "Draft failed");
     } finally {
@@ -563,7 +578,7 @@ function LeadDetail({ lead, onBack, onLeadUpdate }: LeadDetailProps) {
   };
 
   const copyDraft = () => {
-    navigator.clipboard.writeText(draft).then(() => {
+    navigator.clipboard.writeText(activeDraft).then(() => {
       setCopied(true);
       setTimeout(() => setCopied(false), 2000);
     });
@@ -775,55 +790,108 @@ function LeadDetail({ lead, onBack, onLeadUpdate }: LeadDetailProps) {
         className="rounded-2xl p-5 mb-5"
         style={{ backgroundColor: "#FFFFFF", border: "1.5px solid #E7EDF3" }}
       >
-        <div className="flex items-center justify-between mb-4">
+        <div className="flex items-center justify-between mb-3">
           <h2
             className="text-sm font-semibold uppercase tracking-wider"
             style={{ color: "#323B6A", fontFamily: "var(--font-poppins), Poppins, sans-serif" }}
           >
             Outreach Email
           </h2>
-          <div className="flex gap-2">
-            {draft && (
-              <button
-                onClick={copyDraft}
-                className="flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-lg transition-all"
-                style={{
-                  backgroundColor: copied ? "#BDCF7C" : "#E7EDF3",
-                  color: copied ? "#323B6A" : "#6F92BF",
-                  fontFamily: "var(--font-poppins), Poppins, sans-serif",
-                  fontWeight: 600,
-                }}
-              >
-                {copied ? "✓ Copied" : "Copy"}
-              </button>
-            )}
+          {activeDraft && (
             <button
-              onClick={generateDraft}
-              disabled={isDrafting}
-              className="flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-lg"
+              onClick={copyDraft}
+              className="flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-lg transition-all"
               style={{
-                backgroundColor: isDrafting ? "#E7EDF3" : "#323B6A",
-                color: isDrafting ? "#A7B8D1" : "#FFFFFF",
+                backgroundColor: copied ? "#BDCF7C" : "#E7EDF3",
+                color: copied ? "#323B6A" : "#6F92BF",
                 fontFamily: "var(--font-poppins), Poppins, sans-serif",
                 fontWeight: 600,
-                cursor: isDrafting ? "not-allowed" : "pointer",
               }}
             >
-              {isDrafting ? (
-                <>
-                  <svg className="w-3.5 h-3.5 animate-spin" fill="none" viewBox="0 0 24 24">
-                    <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
-                    <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
-                  </svg>
-                  Drafting...
-                </>
-              ) : draft ? (
-                "Regenerate"
-              ) : (
-                "Generate Draft"
-              )}
+              {copied ? "✓ Copied" : "Copy"}
             </button>
-          </div>
+          )}
+        </div>
+
+        {/* Type selector + generate buttons */}
+        <div className="flex gap-2 mb-4">
+          {(["candidate", "intro"] as const).map((type) => {
+            const isActive = activeDraftType === type;
+            const isThisDrafting = isDrafting && isActive;
+            const label = type === "candidate" ? "With Candidate" : "Without Candidate";
+            const hasDraft = type === "candidate" ? !!candidateDraft : !!introDraft;
+            return (
+              <button
+                key={type}
+                onClick={() => {
+                  if (activeDraftType !== type) {
+                    setActiveDraftType(type);
+                    return;
+                  }
+                  generateDraft(type);
+                }}
+                onDoubleClick={() => generateDraft(type)}
+                disabled={isThisDrafting}
+                title={isActive ? (hasDraft ? "Double-click to regenerate" : `Generate ${label} email`) : `Switch to ${label}`}
+                className="flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-lg transition-all"
+                style={{
+                  backgroundColor: isThisDrafting
+                    ? "#E7EDF3"
+                    : isActive
+                    ? "#323B6A"
+                    : "#E7EDF3",
+                  color: isThisDrafting
+                    ? "#A7B8D1"
+                    : isActive
+                    ? "#FFFFFF"
+                    : "#6F92BF",
+                  fontFamily: "var(--font-poppins), Poppins, sans-serif",
+                  fontWeight: 600,
+                  cursor: isThisDrafting ? "not-allowed" : "pointer",
+                  border: isActive && !isThisDrafting ? "none" : "1.5px solid #E7EDF3",
+                }}
+              >
+                {isThisDrafting ? (
+                  <>
+                    <svg className="w-3.5 h-3.5 animate-spin" fill="none" viewBox="0 0 24 24">
+                      <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                      <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+                    </svg>
+                    Drafting...
+                  </>
+                ) : (
+                  label
+                )}
+              </button>
+            );
+          })}
+          {/* Generate / Regenerate button for active type */}
+          <button
+            onClick={() => generateDraft(activeDraftType)}
+            disabled={isDrafting}
+            className="flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-lg ml-auto"
+            style={{
+              backgroundColor: isDrafting ? "#E7EDF3" : "#BDCF7C",
+              color: isDrafting ? "#A7B8D1" : "#323B6A",
+              fontFamily: "var(--font-poppins), Poppins, sans-serif",
+              fontWeight: 600,
+              cursor: isDrafting ? "not-allowed" : "pointer",
+            }}
+          >
+            {isDrafting ? (
+              <>
+                <svg className="w-3.5 h-3.5 animate-spin" fill="none" viewBox="0 0 24 24">
+                  <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                  <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+                </svg>
+                Drafting...
+              </>
+            ) : activeDraft ? (
+              "Regenerate"
+            ) : (
+              "Generate"
+            )}
+          </button>
         </div>
 
         {draftError && (
@@ -835,10 +903,10 @@ function LeadDetail({ lead, onBack, onLeadUpdate }: LeadDetailProps) {
           </div>
         )}
 
-        {draft ? (
+        {activeDraft ? (
           <textarea
-            value={draft}
-            onChange={(e) => setDraft(e.target.value)}
+            value={activeDraft}
+            onChange={(e) => setActiveDraft(e.target.value)}
             rows={8}
             className="w-full px-4 py-3 rounded-xl text-sm outline-none resize-none transition-all"
             style={{
@@ -847,12 +915,8 @@ function LeadDetail({ lead, onBack, onLeadUpdate }: LeadDetailProps) {
               backgroundColor: "#FAFBFC",
               lineHeight: "1.6",
             }}
-            onFocus={(e) => {
-              e.currentTarget.style.borderColor = "#BDCF7C";
-            }}
-            onBlur={(e) => {
-              e.currentTarget.style.borderColor = "#E7EDF3";
-            }}
+            onFocus={(e) => { e.currentTarget.style.borderColor = "#BDCF7C"; }}
+            onBlur={(e) => { e.currentTarget.style.borderColor = "#E7EDF3"; }}
           />
         ) : (
           <div
@@ -863,21 +927,23 @@ function LeadDetail({ lead, onBack, onLeadUpdate }: LeadDetailProps) {
               color: "#A7B8D1",
             }}
           >
-            Click &ldquo;Generate Draft&rdquo; to create your outreach email
+            {activeDraftType === "candidate"
+              ? "Pitch a matched candidate from your CV index"
+              : "Introduce Pair People — no specific candidate"}
           </div>
         )}
       </div>
 
       {/* Refine chat */}
-      {draft && (
+      {activeDraft && (
         <div
           className="rounded-2xl p-5"
           style={{ backgroundColor: "#FFFFFF", border: "1.5px solid #E7EDF3" }}
         >
           <OutreachChat
             companyId={lead.id}
-            currentDraft={draft}
-            onDraftUpdate={setDraft}
+            currentDraft={activeDraft}
+            onDraftUpdate={setActiveDraft}
           />
         </div>
       )}

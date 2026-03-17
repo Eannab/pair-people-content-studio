@@ -9,17 +9,23 @@ import { getOutreachVoiceContext } from "@/lib/outreach-voice-context";
 
 const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
 
+function draftKey(email: string, companyId: string, type: "candidate" | "intro") {
+  const suffix = type === "intro" ? ":intro" : "";
+  return uk(email, `bd:draft:${companyId}${suffix}`);
+}
+
 // GET — return the authenticated user's saved draft for this company
 export async function GET(
-  _request: NextRequest,
+  request: NextRequest,
   { params }: { params: Promise<{ companyId: string }> }
 ) {
   const user = await getSessionUser();
   if (!user) return unauthorized();
 
   const { companyId } = await params;
+  const type = (request.nextUrl.searchParams.get("type") ?? "candidate") as "candidate" | "intro";
   try {
-    const draft = await kv.get<string>(uk(user.email, `bd:draft:${companyId}`));
+    const draft = await kv.get<string>(draftKey(user.email, companyId, type));
     return NextResponse.json({ draft: draft ?? null });
   } catch {
     return NextResponse.json({ draft: null });
@@ -28,7 +34,7 @@ export async function GET(
 
 // POST — generate and save a draft for the authenticated user
 export async function POST(
-  _request: NextRequest,
+  request: NextRequest,
   { params }: { params: Promise<{ companyId: string }> }
 ) {
   const user = await getSessionUser();
@@ -36,6 +42,8 @@ export async function POST(
 
   try {
     const { companyId } = await params;
+    const body = await request.json().catch(() => ({})) as { type?: "candidate" | "intro" };
+    const type: "candidate" | "intro" = body.type ?? "candidate";
 
     const [leads, preferences, outreachVoiceContext] = await Promise.all([
       kv.get<BDLead[]>("bd:leads"),
@@ -43,13 +51,13 @@ export async function POST(
       getOutreachVoiceContext(user.email),
     ]);
 
-    if (!leads) {
-      return NextResponse.json({ error: "No leads found" }, { status: 404 });
-    }
-
-    const lead = leads.find((l) => l.id === companyId);
-    if (!lead) {
+    // Allow stub leads (not in bd:leads) to still generate intro drafts
+    const lead = leads?.find((l) => l.id === companyId) ?? null;
+    if (!lead && leads !== null) {
       return NextResponse.json({ error: "Lead not found" }, { status: 404 });
+    }
+    if (!lead) {
+      return NextResponse.json({ error: "No leads found" }, { status: 404 });
     }
 
     const signalHook = lead.signals[0];
@@ -63,56 +71,47 @@ export async function POST(
 
     const voiceSection = outreachVoiceContext || "";
 
-    // CV matches — pick top 1, pre-compute relevant skill overlap
-    const cvMatches = await getTopCVMatches(lead, 1, 7);
-    const candidate = cvMatches[0]?.candidate ?? null;
+    let promptContent: string;
+    let cvMatches: ReturnType<typeof getTopCVMatches> extends Promise<infer T> ? T : never = [];
 
-    // Cross-reference: only surface skills that map to the company's tech stack
-    const leadStack = lead.techStack.map((t) => t.toLowerCase());
-    const relevantSkills = candidate
-      ? candidate.skills.filter((s) =>
-          leadStack.some(
-            (t) =>
-              t.includes(s.toLowerCase()) || s.toLowerCase().includes(t)
+    if (type === "candidate") {
+      // ── Option 1: Candidate Sell ──────────────────────────────────────────────
+      cvMatches = await getTopCVMatches(lead, 1, 7);
+      const candidate = cvMatches[0]?.candidate ?? null;
+
+      const leadStack = lead.techStack.map((t) => t.toLowerCase());
+      const relevantSkills = candidate
+        ? candidate.skills.filter((s) =>
+            leadStack.some(
+              (t) => t.includes(s.toLowerCase()) || s.toLowerCase().includes(t)
+            )
           )
-        )
-      : [];
-    // Fall back to top skills if overlap is thin
-    const skillsToShow =
-      relevantSkills.length >= 2
-        ? relevantSkills.slice(0, 5)
-        : (candidate?.skills ?? []).slice(0, 5);
+        : [];
+      const skillsToShow =
+        relevantSkills.length >= 2
+          ? relevantSkills.slice(0, 5)
+          : (candidate?.skills ?? []).slice(0, 5);
 
-    // Split signal context by type so the prompt can branch correctly
-    const hiringRole =
-      signalHook?.type === "hiring" ? signalHook.context : "";
-    const growthSignal =
-      signalHook?.type !== "hiring"
-        ? `${signalHook?.label ?? ""}: ${signalHook?.context ?? ""}`.trim()
-        : "";
+      const hiringRole = signalHook?.type === "hiring" ? signalHook.context : "";
+      const growthSignal =
+        signalHook?.type !== "hiring"
+          ? `${signalHook?.label ?? ""}: ${signalHook?.context ?? ""}`.trim()
+          : "";
 
-    // Employer line — "currently at X" or "just left X"
-    const employerLine =
-      candidate?.currentEmployer
+      const employerLine = candidate?.currentEmployer
         ? `currently at ${candidate.currentEmployer}`
         : "";
 
-    const candidateBlock = candidate
-      ? `Candidate to pitch:
+      const candidateBlock = candidate
+        ? `Candidate to pitch:
 - Name: ${candidate.name}
 - Role: ${candidate.seniority} ${candidate.currentRole}${employerLine ? `, ${employerLine}` : ""}
 - Experience: ${candidate.yearsExperience} years
 - Relevant skills (matched to ${lead.companyName}'s stack): ${skillsToShow.join(", ")}
 - Fit reason: ${cvMatches[0].fitExplanation}`
-      : "";
+        : "";
 
-    const response = await anthropic.messages.create({
-      model: "claude-sonnet-4-20250514",
-      max_tokens: 400,
-      messages: [
-        {
-          role: "user",
-          content: `Write a cold outreach email from Éanna (co-founder, Pair People) to the hiring contact at ${lead.companyName}.
+      promptContent = `Write a cold outreach email from Éanna (co-founder, Pair People) to the hiring contact at ${lead.companyName}.
 
 COMPANY CONTEXT:
 - What they build: ${lead.overview || `${lead.companyName} — a ${lead.sector} company`}
@@ -159,20 +158,61 @@ STRICT RULES — follow every one without exception:
 
 9. SIGN OFF: "Cheers, Éanna" — no title, no phone number, no website, nothing else.
 
-Return ONLY the email body text. No subject line.`,
-        },
-      ],
+Return ONLY the email body text. No subject line.`;
+
+    } else {
+      // ── Option 2: Intro Outreach (no candidate) ───────────────────────────────
+      promptContent = `Write a cold outreach email from Éanna (co-founder, Pair People) to the hiring contact at ${lead.companyName}.
+
+This email introduces Pair People — do NOT mention a specific candidate. The goal is to open a conversation about their hiring needs, not to pitch a specific person.
+
+COMPANY CONTEXT:
+- What they build: ${lead.overview || `${lead.companyName} — a ${lead.sector} company`}
+- Sector: ${lead.sector}
+- Signal: ${hookContext || "notable growth activity"}
+- Recent activity: ${lead.recentActivity || ""}
+
+Contact: ${lead.hiringContact.name || "the hiring manager"}${lead.hiringContact.title ? `, ${lead.hiringContact.title}` : ""}
+
+ABOUT PAIR PEOPLE (weave these in naturally — do not list them like a brochure):
+- Sydney-based tech recruitment, specialising in startups and scaleups
+- Deep understanding of the AU tech ecosystem and the hiring challenges at early/growth stage
+- Fixed fee structure — not percentage-based, so no incentive to push salaries up
+- Network of vetted tech candidates across engineering, data, AI, and product
+
+${voiceSection}${prefSection}
+
+STRICT RULES:
+
+1. MAXIMUM 100 WORDS TOTAL. Count carefully. Cut ruthlessly.
+
+2. OPENING: Lead with what ${lead.companyName} builds + the specific signal (${hookContext || "their recent growth"}). Show you've done the research. Don't open with "I" or a generic line.
+
+3. MIDDLE: One tight sentence on why we're reaching out — we specialise in placing tech talent into AU startups and scaleups at exactly this stage. Weave in 1-2 Pair People differentiators naturally (especially fixed fee — it's a genuine differentiator from the big agencies).
+
+4. TONE: Warm and direct, like a peer who follows the space — not a sales pitch, not a template. Avoid agency-speak.
+
+5. CLOSING: Low-commitment ask — "Worth a quick chat?" or "Open to a conversation?"
+
+6. SIGN OFF: "Cheers, Éanna" — no title, no phone number, no website, nothing else.
+
+Return ONLY the email body text. No subject line.`;
+    }
+
+    const response = await anthropic.messages.create({
+      model: "claude-sonnet-4-20250514",
+      max_tokens: 400,
+      messages: [{ role: "user", content: promptContent }],
     });
 
     const draft =
       response.content[0].type === "text" ? response.content[0].text.trim() : "";
 
-    // Store draft under the authenticated user's namespace
-    await kv.set(uk(user.email, `bd:draft:${companyId}`), draft, {
+    await kv.set(draftKey(user.email, companyId, type), draft, {
       ex: 60 * 60 * 24 * 30,
     });
 
-    return NextResponse.json({ draft, cvMatches });
+    return NextResponse.json({ draft, cvMatches, type });
   } catch (err) {
     console.error("bd/draft error:", err);
     return NextResponse.json(
