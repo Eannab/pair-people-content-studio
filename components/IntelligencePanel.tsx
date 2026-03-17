@@ -99,7 +99,7 @@ function ArticleCard({
 
         {/* Score + sector */}
         <div className="flex items-center gap-2 mb-3">
-          <SectorBadge sector={article.topSector} />
+          <SectorBadge sector={article.sector} />
           <div className="flex-1">
             <ScoreBar score={article.topScore} />
           </div>
