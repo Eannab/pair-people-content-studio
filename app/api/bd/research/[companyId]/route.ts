@@ -7,39 +7,77 @@ export const maxDuration = 60;
 
 const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
 
-async function braveSearch(query: string): Promise<string> {
-  const apiKey = process.env.BRAVE_SEARCH_API_KEY;
-  if (!apiKey) return "";
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), 10000);
+// Domains that are aggregators/socials — not the company's own website
+const AGGREGATOR_DOMAINS = new Set([
+  "linkedin.com", "crunchbase.com", "angel.co", "angellist.com",
+  "pitchbook.com", "glassdoor.com", "twitter.com", "x.com",
+  "facebook.com", "instagram.com", "techcrunch.com", "bloomberg.com",
+  "reuters.com", "forbes.com", "businesswire.com", "prnewswire.com",
+  "tracxn.com", "owler.com", "zoominfo.com", "dnb.com",
+  "wikipedia.org", "wikimedia.org", "github.com", "youtube.com",
+]);
+
+function isRealCompanyWebsite(url: string): boolean {
+  if (!url) return false;
   try {
-    const res = await fetch(
-      `https://api.search.brave.com/res/v1/web/search?q=${encodeURIComponent(query)}&count=5`,
-      {
-        headers: {
-          Accept: "application/json",
-          "Accept-Encoding": "gzip",
-          "X-Subscription-Token": apiKey,
-        },
-        signal: controller.signal,
-      }
-    );
-    if (!res.ok) return "";
-    const data = await res.json();
-    const snippets = (data.web?.results ?? [])
-      .slice(0, 5)
-      .map(
-        (r: { title: string; description: string; url: string }) =>
-          `${r.title}: ${r.description} (${r.url})`
-      )
-      .join("\n");
-    return snippets;
+    const { hostname } = new URL(url);
+    const domain = hostname.replace(/^www\./, "");
+    return !AGGREGATOR_DOMAINS.has(domain);
   } catch {
-    return "";
-  } finally {
-    clearTimeout(timeout);
+    return false;
   }
 }
+
+type ResearchResult = {
+  overview: string;
+  techStack: string[];
+  recentActivity: string;
+  relevanceScore: number;
+  relevanceReason: string;
+  australiaPresence?: AustraliaPresence;
+  hiringContact: { name: string; title: string; linkedInUrl: string };
+  companyWebsite?: string;
+  verified?: boolean;
+  confidence: "high" | "medium" | "low";
+};
+
+function parseResearchJson(raw: string): ResearchResult | null {
+  const clean = raw.replace(/^```(?:json)?\n?/, "").replace(/\n?```$/, "");
+  try {
+    return JSON.parse(clean);
+  } catch {
+    return null;
+  }
+}
+
+const RESEARCH_SCHEMA = `{
+  "overview": "2-3 sentence company description covering what they do, company stage, and Sydney/Australia relevance",
+  "techStack": ["React", "Python", "AWS"],
+  "recentActivity": "1-2 sentences on their most recent notable activity",
+  "relevanceScore": 8,
+  "relevanceReason": "one sharp sentence explaining why Pair People should reach out now",
+  "australiaPresence": {
+    "basedInAustralia": true,
+    "hiringInAustralia": true,
+    "detail": "Sydney HQ, Series A team of ~30"
+  },
+  "hiringContact": {
+    "name": "Jane Smith",
+    "title": "CTO",
+    "linkedInUrl": "https://linkedin.com/in/janesmith"
+  },
+  "companyWebsite": "https://acme.com",
+  "confidence": "high"
+}`;
+
+const SCHEMA_RULES = `Rules:
+- relevanceScore 1-10: urgency and value of this lead for Pair People specifically
+- australiaPresence.detail: concise note on AU connection (e.g. "Sydney HQ", "Melbourne-based", "Hiring remotely in AU")
+- hiringContact: most senior person for a recruitment pitch — CTO, VP Engineering, Head of Engineering, or Founder
+- linkedInUrl: best guess at their LinkedIn profile URL, or "" if unknown
+- companyWebsite: the company's OFFICIAL website (not LinkedIn, Crunchbase, or news sites). Use "" if not found.
+- confidence: "high" if solid data, "medium" if reasonable inference, "low" if mostly estimated
+- Return ONLY the JSON object — no markdown fences, no preamble.`;
 
 export async function POST(
   request: NextRequest,
@@ -53,7 +91,6 @@ export async function POST(
     let lead = leads.find((l) => l.id === companyId);
 
     if (!lead) {
-      // Stub lead from View Brief fallback — create it inline using the provided name
       const companyName = body.companyName ?? companyId;
       lead = {
         id: companyId,
@@ -76,34 +113,60 @@ export async function POST(
       .map((s) => `- ${s.type.toUpperCase()} (${s.label}): ${s.context} [from: ${s.articleTitle}]`)
       .join("\n");
 
-    const searchResults = await braveSearch(
-      `${lead.companyName} engineering team tech stack 2024 2025 hiring`
-    );
-
     const sectorLabel =
-      lead.sector === "ai"
-        ? "AI/ML engineering"
-        : lead.sector === "defence"
-        ? "defence tech"
-        : lead.sector === "healthtech"
-        ? "healthtech"
-        : "Sydney tech";
+      lead.sector === "ai" ? "AI/ML engineering" :
+      lead.sector === "defence" ? "defence tech" :
+      lead.sector === "healthtech" ? "healthtech" :
+      "Sydney tech";
 
-    // ── No search results: lightweight fallback (faster, verified: false) ─────
-    if (!searchResults) {
-      const fallback = await anthropic.messages.create({
+    const prompt = `Research ${lead.companyName} for Pair People, a Sydney tech recruitment agency placing engineers and tech leaders in ${sectorLabel}.
+
+Known signals for this company:
+${signalContext || `${lead.companyName} — a ${lead.sector} company`}
+
+Use web search to find: their official website, tech stack, team size, Australia presence, and the best hiring contact (CTO / VP Eng / Head of Eng).
+
+Return ONLY a JSON object:
+${RESEARCH_SCHEMA}
+
+${SCHEMA_RULES}`;
+
+    // ── Primary path: Claude with web_search tool ─────────────────────────────
+    let research: ResearchResult | null = null;
+
+    try {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const wsResponse = await anthropic.messages.create({
+        model: "claude-sonnet-4-20250514",
+        max_tokens: 1500,
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        tools: [{ type: "web_search_20250305", name: "web_search" }] as any,
+        messages: [{ role: "user", content: prompt }],
+      });
+
+      const textBlock = wsResponse.content.find((b) => b.type === "text");
+      if (textBlock && textBlock.type === "text") {
+        research = parseResearchJson(textBlock.text);
+      }
+    } catch (wsErr) {
+      console.warn("bd/research: Claude web search failed, falling back", wsErr);
+    }
+
+    // ── Fallback: signal-only brief (no web search) ───────────────────────────
+    if (!research) {
+      const fallbackResponse = await anthropic.messages.create({
         model: "claude-sonnet-4-20250514",
         max_tokens: 400,
         messages: [{
           role: "user",
-          content: `Write a brief company profile for ${lead.companyName} based only on the signal below. No web search was available.
+          content: `Write a brief company profile for ${lead.companyName} based only on the signal below. No web search available.
 
 Known signals:
 ${signalContext || `${lead.companyName} — a ${lead.sector} company`}
 
 Return ONLY a JSON object (no markdown fences):
 {
-  "overview": "1-2 sentences based strictly on the signal context above",
+  "overview": "1-2 sentences based strictly on the signal context",
   "techStack": [],
   "recentActivity": "based on the signal",
   "relevanceScore": 6,
@@ -111,130 +174,33 @@ Return ONLY a JSON object (no markdown fences):
   "australiaPresence": {"basedInAustralia": false, "hiringInAustralia": false, "detail": "Unknown — no search data"},
   "hiringContact": {"name": "", "title": "", "linkedInUrl": ""},
   "companyWebsite": "",
-  "verified": false,
   "confidence": "low"
 }`,
         }],
       });
 
-      const fbRaw = fallback.content[0].type === "text" ? fallback.content[0].text.trim() : "{}";
-      const fbClean = fbRaw.replace(/^```(?:json)?\n?/, "").replace(/\n?```$/, "");
-      let fbResearch: Record<string, unknown>;
-      try { fbResearch = JSON.parse(fbClean); } catch { fbResearch = {}; }
-
-      const now = new Date().toISOString();
-      const updatedLead: BDLead = {
-        ...lead,
-        overview: (fbResearch.overview as string) || lead.overview,
-        techStack: (fbResearch.techStack as string[]) || lead.techStack,
-        recentActivity: (fbResearch.recentActivity as string) || lead.recentActivity,
-        relevanceScore: (fbResearch.relevanceScore as number) ?? lead.relevanceScore,
-        relevanceReason: (fbResearch.relevanceReason as string) || lead.relevanceReason,
-        hiringContact: (fbResearch.hiringContact as BDLead["hiringContact"]) || lead.hiringContact,
-        companyWebsite: "",
-        verified: false,
-        confidence: "low",
-        researchedAt: now,
-      };
-
-      const exists = leads.some((l) => l.id === companyId);
-      const updatedLeads = exists
-        ? leads.map((l) => (l.id === companyId ? updatedLead : l))
-        : [...leads, updatedLead];
-      try { await kv.set("bd:leads", updatedLeads, { ex: 60 * 60 * 24 * 30 }); } catch {}
-
-      return NextResponse.json({ lead: updatedLead });
+      const fbText = fallbackResponse.content[0].type === "text"
+        ? fallbackResponse.content[0].text : "{}";
+      research = parseResearchJson(fbText) ?? ({} as ResearchResult);
     }
 
-    // ── Full research path (search results available) ─────────────────────────
-    const response = await anthropic.messages.create({
-      model: "claude-sonnet-4-20250514",
-      max_tokens: 1500,
-      messages: [
-        {
-          role: "user",
-          content: `Research ${lead.companyName} for Pair People, a Sydney tech recruitment agency placing engineers and tech leaders in ${sectorLabel}.
-
-Known signals for this company:
-${signalContext}
-
-Web search results:
-${searchResults}
-
-Return a JSON object:
-{
-  "overview": "2-3 sentence company description covering what they do, company stage, and Sydney/Australia relevance",
-  "techStack": ["React", "Python", "AWS"],
-  "recentActivity": "1-2 sentences on their most recent notable activity (beyond the signal already captured)",
-  "relevanceScore": 8,
-  "relevanceReason": "one sharp sentence explaining why Pair People should reach out to this company right now",
-  "australiaPresence": {
-    "basedInAustralia": true,
-    "hiringInAustralia": true,
-    "detail": "Sydney HQ, Series A team of ~30"
-  },
-  "hiringContact": {
-    "name": "Jane Smith",
-    "title": "CTO",
-    "linkedInUrl": "https://linkedin.com/in/janesmith"
-  },
-  "companyWebsite": "https://acme.com",
-  "verified": true,
-  "confidence": "high"
-}
-
-Rules:
-- relevanceScore 1-10: urgency and value of this lead for Pair People specifically
-- australiaPresence.detail: concise note on AU connection (e.g. "Sydney HQ", "Melbourne-based", "Hiring remotely in AU", "AU subsidiary"); use your best knowledge
-- hiringContact: the most senior person likely to receive a recruitment pitch — CTO, VP Engineering, Head of Engineering, or Founder for early-stage
-- linkedInUrl: your best guess at their LinkedIn profile URL, or empty string "" if genuinely unknown
-- companyWebsite: the company's OFFICIAL website URL extracted from search results. Look at the search result URLs — the company homepage is usually the top result. Use "" only if genuinely not found.
-- verified: true if search results confirm this is a real company with a real website. false otherwise.
-- confidence: "high" if you have solid data, "medium" if reasonable inference, "low" if mostly estimated
-- Return ONLY the JSON object — no markdown fences, no preamble.`,
-        },
-      ],
-    });
-
-    const raw =
-      response.content[0].type === "text" ? response.content[0].text.trim() : "{}";
-    const clean = raw.replace(/^```(?:json)?\n?/, "").replace(/\n?```$/, "");
-
-    let research: {
-      overview: string;
-      techStack: string[];
-      recentActivity: string;
-      relevanceScore: number;
-      relevanceReason: string;
-      australiaPresence?: AustraliaPresence;
-      hiringContact: { name: string; title: string; linkedInUrl: string };
-      companyWebsite?: string;
-      verified?: boolean;
-      confidence: "high" | "medium" | "low";
-    } | null = null;
-
-    try {
-      research = JSON.parse(clean);
-    } catch {
-      return NextResponse.json(
-        { error: "Failed to parse research response" },
-        { status: 500 }
-      );
-    }
+    // ── Determine verified from website quality ───────────────────────────────
+    const websiteUrl = research.companyWebsite || "";
+    const verified = isRealCompanyWebsite(websiteUrl);
 
     const now = new Date().toISOString();
     const updatedLead: BDLead = {
       ...lead,
-      overview: research!.overview || lead.overview,
-      techStack: research!.techStack || lead.techStack,
-      recentActivity: research!.recentActivity || lead.recentActivity,
-      relevanceScore: research!.relevanceScore ?? lead.relevanceScore,
-      relevanceReason: research!.relevanceReason || lead.relevanceReason,
-      australiaPresence: research!.australiaPresence ?? lead.australiaPresence,
-      hiringContact: research!.hiringContact || lead.hiringContact,
-      companyWebsite: research!.companyWebsite || lead.companyWebsite || "",
-      verified: research!.verified ?? lead.verified ?? false,
-      confidence: research!.confidence || lead.confidence,
+      overview: research.overview || lead.overview,
+      techStack: research.techStack || lead.techStack,
+      recentActivity: research.recentActivity || lead.recentActivity,
+      relevanceScore: research.relevanceScore ?? lead.relevanceScore,
+      relevanceReason: research.relevanceReason || lead.relevanceReason,
+      australiaPresence: research.australiaPresence ?? lead.australiaPresence,
+      hiringContact: research.hiringContact || lead.hiringContact,
+      companyWebsite: websiteUrl,
+      verified,
+      confidence: research.confidence || lead.confidence,
       researchedAt: now,
     };
 
