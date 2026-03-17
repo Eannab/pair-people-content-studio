@@ -177,25 +177,9 @@ Return ONLY the JSON array — no markdown fences, no preamble.`,
     }));
 }
 
-async function scoreArticles(
-  articles: ExtractedArticle[]
-): Promise<ScoredArticle[]> {
-  if (articles.length === 0) return [];
-
-  const listText = articles
-    .map(
-      (a, i) =>
-        `${i + 1}. "${a.title}" (from ${a.source})\n   ${a.summary}`
-    )
-    .join("\n\n");
-
-  const response = await anthropic.messages.create({
-    model: "claude-sonnet-4-20250514",
-    max_tokens: 2000,
-    messages: [
-      {
-        role: "user",
-        content: `Score these ${articles.length} articles 1–10 for relevance to Pair People, a Sydney-based tech recruitment agency that places developers, engineers, data scientists, and technical leaders into Australian startups and scaleups.
+const SCORE_BATCH_SIZE = 10;
+const SCORE_PROMPT = (count: number, listText: string) =>
+  `Score these ${count} articles 1–10 for relevance to Pair People, a Sydney-based tech recruitment agency that places developers, engineers, data scientists, and technical leaders into Australian startups and scaleups.
 
 Score HIGH (7-10) if the article mentions ANY company that:
 - Is Australian or expanding into Australia/NZ
@@ -220,38 +204,61 @@ For each article return a JSON array (same order as input):
   "relevanceSummary": "one sentence on why this company matters to a tech recruiter"
 }]
 
-Return ONLY the JSON array — no markdown fences, no preamble.`,
-      },
-    ],
-  });
+Return ONLY the JSON array — no markdown fences, no preamble.`;
 
-  const raw =
-    response.content[0].type === "text" ? response.content[0].text.trim() : "[]";
-  const clean = raw.replace(/^```(?:json)?\n?/, "").replace(/\n?```$/, "");
+const DEFAULT_SCORE = { topScore: 5, sector: "general", relevanceSummary: "" };
 
-  let scored: Array<{
-    topScore: number;
-    sector: string;
-    relevanceSummary: string;
-  }> = [];
+async function scoreBatch(
+  batch: ExtractedArticle[]
+): Promise<Array<{ topScore: number; sector: string; relevanceSummary: string }>> {
+  const listText = batch
+    .map((a, i) => `${i + 1}. "${a.title}" (from ${a.source})\n   ${a.summary}`)
+    .join("\n\n");
 
   try {
-    scored = JSON.parse(clean);
-  } catch {
-    // Fallback: give every article a passing score
-    scored = articles.map(() => ({
-      topScore: 7,
-      sector: "general",
-      relevanceSummary: "",
-    }));
+    const response = await anthropic.messages.create({
+      model: "claude-sonnet-4-20250514",
+      max_tokens: 2000,
+      messages: [{ role: "user", content: SCORE_PROMPT(batch.length, listText) }],
+    });
+
+    const raw =
+      response.content[0].type === "text" ? response.content[0].text.trim() : "[]";
+    const clean = raw.replace(/^```(?:json)?\n?/, "").replace(/\n?```$/, "");
+
+    try {
+      return JSON.parse(clean);
+    } catch {
+      console.warn(`[newsletters/scan] JSON parse failed for scoring batch of ${batch.length} — using defaults`);
+      return batch.map(() => DEFAULT_SCORE);
+    }
+  } catch (err) {
+    console.error(`[newsletters/scan] Sonnet scoring failed for batch of ${batch.length}:`, err);
+    return batch.map(() => DEFAULT_SCORE);
+  }
+}
+
+async function scoreArticles(
+  articles: ExtractedArticle[]
+): Promise<ScoredArticle[]> {
+  if (articles.length === 0) return [];
+
+  const allScored: Array<{ topScore: number; sector: string; relevanceSummary: string }> = [];
+
+  for (let i = 0; i < articles.length; i += SCORE_BATCH_SIZE) {
+    const batch = articles.slice(i, i + SCORE_BATCH_SIZE);
+    console.log(`[newsletters/scan] scoring batch ${Math.floor(i / SCORE_BATCH_SIZE) + 1} (${batch.length} articles)`);
+    const batchScores = await scoreBatch(batch);
+    allScored.push(...batchScores);
+    if (i + SCORE_BATCH_SIZE < articles.length) await sleep(2000);
   }
 
   return articles.map((article, i) => ({
     id: `${article.emailId}-${i}`,
     ...article,
-    topScore: scored[i]?.topScore ?? 7,
-    sector: scored[i]?.sector ?? "general",
-    relevanceSummary: scored[i]?.relevanceSummary ?? "",
+    topScore: allScored[i]?.topScore ?? 5,
+    sector: allScored[i]?.sector ?? "general",
+    relevanceSummary: allScored[i]?.relevanceSummary ?? "",
   }));
 }
 
@@ -389,8 +396,14 @@ export async function POST() {
     let insightsAdded = 0;
 
     if (relevantArticles.length > 0) {
-      const { bdLeads: detectedLeads, marketInsights: detectedInsights } =
-        await detectBDSignals(relevantArticles);
+      let detectedLeads: BDLead[] = [];
+      let detectedInsights: MarketInsightSignal[] = [];
+      try {
+        ({ bdLeads: detectedLeads, marketInsights: detectedInsights } =
+          await detectBDSignals(relevantArticles));
+      } catch (err) {
+        console.error("[newsletters/scan] detectBDSignals failed — articles saved, leads skipped:", err);
+      }
 
       // Merge BD leads
       let existingLeads: BDLead[] = [];
