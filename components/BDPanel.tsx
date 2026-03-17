@@ -527,32 +527,39 @@ interface LeadDetailProps {
   onLeadUpdate?: (updated: BDLead) => void;
 }
 
+type Channel = "email" | "linkedin" | "text";
+
 function LeadDetail({ lead, onBack, onLeadUpdate }: LeadDetailProps) {
-  const [candidateDraft, setCandidateDraft] = useState("");
-  const [introDraft, setIntroDraft] = useState("");
+  const [channel, setChannel] = useState<Channel>("email");
+  const [drafts, setDrafts] = useState<Record<string, string>>({});
+  const [followUps, setFollowUps] = useState<Record<string, string>>({});
   const [activeDraftType, setActiveDraftType] = useState<"candidate" | "intro">("candidate");
   const [isDrafting, setIsDrafting] = useState(false);
+  const [isDraftingFollowUp, setIsDraftingFollowUp] = useState(false);
   const [draftError, setDraftError] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
+  const [copiedFollowUp, setCopiedFollowUp] = useState(false);
   const [isResearching, setIsResearching] = useState(false);
   const [candidateMatches, setCandidateMatches] = useState<CVMatch[]>([]);
   const [activeCandidateIndex, setActiveCandidateIndex] = useState(0);
 
-  const activeDraft = activeDraftType === "candidate" ? candidateDraft : introDraft;
-  const setActiveDraft = (val: string) => {
-    if (activeDraftType === "candidate") setCandidateDraft(val);
-    else setIntroDraft(val);
-  };
+  const activeKey = `${channel}:${activeDraftType}`;
+  const activeDraft = drafts[activeKey] ?? "";
+  const followUpDraft = followUps[activeKey] ?? "";
+  const setActiveDraft = (val: string) => setDrafts((d) => ({ ...d, [activeKey]: val }));
   const ap = lead.australiaPresence;
 
-  // Load both saved drafts on mount
+  // Load saved email drafts on mount
   React.useEffect(() => {
     Promise.all([
-      fetch(`/api/bd/draft/${lead.id}`).then((r) => r.json()).catch(() => ({})),
-      fetch(`/api/bd/draft/${lead.id}?type=intro`).then((r) => r.json()).catch(() => ({})),
+      fetch(`/api/bd/draft/${lead.id}?channel=email&type=candidate`).then((r) => r.json()).catch(() => ({})),
+      fetch(`/api/bd/draft/${lead.id}?channel=email&type=intro`).then((r) => r.json()).catch(() => ({})),
     ]).then(([cData, iData]) => {
-      if (cData.draft) setCandidateDraft(cData.draft);
-      if (iData.draft) setIntroDraft(iData.draft);
+      setDrafts((d) => ({
+        ...d,
+        ...(cData.draft ? { "email:candidate": cData.draft } : {}),
+        ...(iData.draft ? { "email:intro": iData.draft } : {}),
+      }));
     });
   }, [lead.id]);
 
@@ -584,22 +591,19 @@ function LeadDetail({ lead, onBack, onLeadUpdate }: LeadDetailProps) {
     setActiveDraftType(type);
     setIsDrafting(true);
     setDraftError(null);
+    const key = `${channel}:${type}`;
     try {
       const res = await fetch(`/api/bd/draft/${lead.id}`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ type, ...(type === "candidate" ? { candidateIndex } : {}) }),
+        body: JSON.stringify({ type, channel, ...(type === "candidate" ? { candidateIndex } : {}) }),
       });
       if (!res.ok) throw new Error("Draft generation failed");
       const data = await res.json();
-      if (type === "candidate") {
-        setCandidateDraft(data.draft);
-        if (data.cvMatches?.length > 0) {
-          setCandidateMatches(data.cvMatches);
-          setActiveCandidateIndex(candidateIndex);
-        }
-      } else {
-        setIntroDraft(data.draft);
+      setDrafts((d) => ({ ...d, [key]: data.draft }));
+      if (type === "candidate" && data.cvMatches?.length > 0) {
+        setCandidateMatches(data.cvMatches);
+        setActiveCandidateIndex(candidateIndex);
       }
     } catch (err) {
       setDraftError(err instanceof Error ? err.message : "Draft failed");
@@ -608,10 +612,37 @@ function LeadDetail({ lead, onBack, onLeadUpdate }: LeadDetailProps) {
     }
   };
 
+  const generateFollowUp = async () => {
+    if (!activeDraft) return;
+    setIsDraftingFollowUp(true);
+    const key = `${channel}:${activeDraftType}`;
+    try {
+      const res = await fetch(`/api/bd/draft/${lead.id}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ type: activeDraftType, channel, followUp: true, originalMessage: activeDraft }),
+      });
+      if (!res.ok) throw new Error("Follow-up generation failed");
+      const data = await res.json();
+      setFollowUps((f) => ({ ...f, [key]: data.draft }));
+    } catch {
+      // silent — user can retry
+    } finally {
+      setIsDraftingFollowUp(false);
+    }
+  };
+
   const copyDraft = () => {
     navigator.clipboard.writeText(activeDraft).then(() => {
       setCopied(true);
       setTimeout(() => setCopied(false), 2000);
+    });
+  };
+
+  const copyFollowUp = () => {
+    navigator.clipboard.writeText(followUpDraft).then(() => {
+      setCopiedFollowUp(true);
+      setTimeout(() => setCopiedFollowUp(false), 2000);
     });
   };
 
@@ -816,7 +847,7 @@ function LeadDetail({ lead, onBack, onLeadUpdate }: LeadDetailProps) {
         </div>
       )}
 
-      {/* Outreach email */}
+      {/* Outreach */}
       <div
         className="rounded-2xl p-5 mb-5"
         style={{ backgroundColor: "#FFFFFF", border: "1.5px solid #E7EDF3" }}
@@ -826,7 +857,7 @@ function LeadDetail({ lead, onBack, onLeadUpdate }: LeadDetailProps) {
             className="text-sm font-semibold uppercase tracking-wider"
             style={{ color: "#323B6A", fontFamily: "var(--font-poppins), Poppins, sans-serif" }}
           >
-            Outreach Email
+            Outreach
           </h2>
           {activeDraft && (
             <button
@@ -844,13 +875,36 @@ function LeadDetail({ lead, onBack, onLeadUpdate }: LeadDetailProps) {
           )}
         </div>
 
+        {/* Channel tabs */}
+        <div className="flex gap-1 mb-4 p-1 rounded-xl" style={{ backgroundColor: "#F4F6FA" }}>
+          {(["email", "linkedin", "text"] as Channel[]).map((ch) => {
+            const labels: Record<Channel, string> = { email: "Email", linkedin: "LinkedIn InMail", text: "Text / SMS" };
+            const isActive = channel === ch;
+            return (
+              <button
+                key={ch}
+                onClick={() => setChannel(ch)}
+                className="flex-1 text-xs py-1.5 rounded-lg font-semibold transition-all"
+                style={{
+                  backgroundColor: isActive ? "#FFFFFF" : "transparent",
+                  color: isActive ? "#323B6A" : "#A7B8D1",
+                  fontFamily: "var(--font-poppins), Poppins, sans-serif",
+                  boxShadow: isActive ? "0 1px 3px rgba(0,0,0,0.08)" : "none",
+                }}
+              >
+                {labels[ch]}
+              </button>
+            );
+          })}
+        </div>
+
         {/* Type selector + generate buttons */}
         <div className="flex gap-2 mb-4">
           {(["candidate", "intro"] as const).map((type) => {
             const isActive = activeDraftType === type;
             const isThisDrafting = isDrafting && isActive;
             const label = type === "candidate" ? "With Candidate" : "Without Candidate";
-            const hasDraft = type === "candidate" ? !!candidateDraft : !!introDraft;
+            const hasDraft = !!drafts[`${channel}:${type}`];
             return (
               <button
                 key={type}
@@ -1057,7 +1111,7 @@ function LeadDetail({ lead, onBack, onLeadUpdate }: LeadDetailProps) {
           <textarea
             value={activeDraft}
             onChange={(e) => setActiveDraft(e.target.value)}
-            rows={8}
+            rows={channel === "email" ? 8 : channel === "linkedin" ? 4 : 2}
             className="w-full px-4 py-3 rounded-xl text-sm outline-none resize-none transition-all"
             style={{
               border: "1.5px solid #E7EDF3",
@@ -1082,10 +1136,76 @@ function LeadDetail({ lead, onBack, onLeadUpdate }: LeadDetailProps) {
               : "Introduce Pair People — no specific candidate"}
           </div>
         )}
+
+        {/* Follow-up section */}
+        {activeDraft && (
+          <div className="mt-4 pt-4" style={{ borderTop: "1.5px solid #F4F6FA" }}>
+            <div className="flex items-center justify-between mb-3">
+              <p className="text-xs font-semibold uppercase tracking-wider" style={{ color: "#A7B8D1", fontFamily: "var(--font-poppins), Poppins, sans-serif" }}>
+                Follow-up
+              </p>
+              <div className="flex items-center gap-2">
+                {followUpDraft && (
+                  <button
+                    onClick={copyFollowUp}
+                    className="text-xs px-3 py-1.5 rounded-lg transition-all"
+                    style={{
+                      backgroundColor: copiedFollowUp ? "#BDCF7C" : "#E7EDF3",
+                      color: copiedFollowUp ? "#323B6A" : "#6F92BF",
+                      fontFamily: "var(--font-poppins), Poppins, sans-serif",
+                      fontWeight: 600,
+                    }}
+                  >
+                    {copiedFollowUp ? "✓ Copied" : "Copy"}
+                  </button>
+                )}
+                <button
+                  onClick={generateFollowUp}
+                  disabled={isDraftingFollowUp}
+                  className="flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-lg transition-all"
+                  style={{
+                    backgroundColor: isDraftingFollowUp ? "#E7EDF3" : followUpDraft ? "#F4F6FA" : "#323B6A",
+                    color: isDraftingFollowUp ? "#A7B8D1" : followUpDraft ? "#6F92BF" : "#FFFFFF",
+                    fontFamily: "var(--font-poppins), Poppins, sans-serif",
+                    fontWeight: 600,
+                    cursor: isDraftingFollowUp ? "not-allowed" : "pointer",
+                    border: followUpDraft && !isDraftingFollowUp ? "1.5px solid #E7EDF3" : "none",
+                  }}
+                >
+                  {isDraftingFollowUp ? (
+                    <>
+                      <svg className="w-3.5 h-3.5 animate-spin" fill="none" viewBox="0 0 24 24">
+                        <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                        <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+                      </svg>
+                      Drafting...
+                    </>
+                  ) : followUpDraft ? "Regenerate Follow-up" : "Generate Follow-up"}
+                </button>
+              </div>
+            </div>
+            {followUpDraft && (
+              <textarea
+                value={followUpDraft}
+                onChange={(e) => setFollowUps((f) => ({ ...f, [activeKey]: e.target.value }))}
+                rows={channel === "email" ? 5 : 2}
+                className="w-full px-4 py-3 rounded-xl text-sm outline-none resize-none transition-all"
+                style={{
+                  border: "1.5px solid #E7EDF3",
+                  color: "#323B6A",
+                  backgroundColor: "#FAFBFC",
+                  lineHeight: "1.6",
+                }}
+                onFocus={(e) => { e.currentTarget.style.borderColor = "#6F92BF"; }}
+                onBlur={(e) => { e.currentTarget.style.borderColor = "#E7EDF3"; }}
+              />
+            )}
+          </div>
+        )}
       </div>
 
-      {/* Refine chat */}
-      {activeDraft && (
+      {/* Refine chat — email only */}
+      {activeDraft && channel === "email" && (
         <div
           className="rounded-2xl p-5"
           style={{ backgroundColor: "#FFFFFF", border: "1.5px solid #E7EDF3" }}
