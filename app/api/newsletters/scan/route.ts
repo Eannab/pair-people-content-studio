@@ -309,7 +309,7 @@ export async function POST() {
     }
 
     // 5. Fetch full body for each matching email (parallel, cap at 10)
-    const toProcess = matching.slice(0, 10);
+    const toProcess = matching.slice(0, 30);
     const bodyResults = await Promise.allSettled(
       toProcess.map((m) => fetchEmailBody(session.accessToken!, m.id))
     );
