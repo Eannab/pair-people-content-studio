@@ -37,7 +37,7 @@ async function extractCompanies(articles: ScoredArticle[]): Promise<ExtractedCom
   const articleText = articles
     .map(
       (a, i) =>
-        `${i + 1}. [${a.sector.toUpperCase()}] "${a.title}" (${a.source})\n   ${a.summary}`
+        `${i + 1}. [${(a.sector ?? "general").toUpperCase()}] "${a.title}" (${a.source})\n   ${a.summary}`
     )
     .join("\n\n");
 
