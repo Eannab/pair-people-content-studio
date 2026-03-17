@@ -44,9 +44,13 @@ interface ExtractedArticle {
   emailId: string;
 }
 
+export const maxDuration = 300;
+
 const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
+
+const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
 function stripHtml(html: string): string {
   return html
@@ -93,7 +97,7 @@ async function extractArticlesFromEmail(
 ): Promise<ExtractedArticle[]> {
   const truncated = bodyText.substring(0, 15000);
 
-  const response = await anthropic.messages.create({
+  const makeRequest = () => anthropic.messages.create({
     model: "claude-haiku-4-5-20251001",
     max_tokens: 4000,
     messages: [
@@ -115,6 +119,20 @@ Return ONLY the JSON array — no markdown fences, no preamble.`,
       },
     ],
   });
+
+  let response;
+  try {
+    response = await makeRequest();
+  } catch (err: unknown) {
+    const status = (err as { status?: number }).status;
+    if (status === 429) {
+      console.warn(`[newsletters/scan] 429 on "${email.subject}" — waiting 5s and retrying`);
+      await sleep(5000);
+      response = await makeRequest();
+    } else {
+      throw err;
+    }
+  }
 
   const raw =
     response.content[0].type === "text" ? response.content[0].text.trim() : "[]";
@@ -316,33 +334,31 @@ export async function POST() {
       });
     }
 
-    // 5. Fetch full body for each matching email (parallel, cap at 10)
+    // 5. Fetch full bodies in parallel (Graph API, not rate-limited like Anthropic)
     const toProcess = matching.slice(0, 30);
     const bodyResults = await Promise.allSettled(
       toProcess.map((m) => fetchEmailBody(session.accessToken!, m.id))
     );
 
-    // 6. Extract articles from each email (parallel)
-    const extractionResults = await Promise.allSettled(
-      toProcess.map((msg, i) => {
-        const body =
-          bodyResults[i].status === "fulfilled"
-            ? bodyResults[i].value
-            : msg.bodyPreview;
-        return extractArticlesFromEmail(msg, body);
-      })
-    );
-
+    // 6. Extract articles sequentially to avoid Anthropic 429s
     const allExtracted: ExtractedArticle[] = [];
-    extractionResults.forEach((r, i) => {
-      if (r.status === "fulfilled") {
+    for (let i = 0; i < toProcess.length; i++) {
+      const msg = toProcess[i];
+      const body =
+        bodyResults[i].status === "fulfilled"
+          ? (bodyResults[i] as PromiseFulfilledResult<string>).value
+          : msg.bodyPreview;
+      try {
+        const articles = await extractArticlesFromEmail(msg, body);
         // 3. Articles extracted per email
-        console.log(`[newsletters/scan] "${toProcess[i].subject}" → ${r.value.length} articles extracted`);
-        allExtracted.push(...r.value);
-      } else {
-        console.warn(`[newsletters/scan] extraction failed for "${toProcess[i].subject}":`, r.reason);
+        console.log(`[newsletters/scan] "${msg.subject}" → ${articles.length} articles extracted`);
+        allExtracted.push(...articles);
+      } catch (err) {
+        console.warn(`[newsletters/scan] extraction failed for "${msg.subject}":`, err);
       }
-    });
+      // 1s delay between Haiku calls to stay within rate limits
+      if (i < toProcess.length - 1) await sleep(1000);
+    }
     console.log(`[newsletters/scan] ${allExtracted.length} total articles extracted across all emails`);
 
     // 7. Score all articles in one Claude call
