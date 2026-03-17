@@ -59,9 +59,20 @@ export async function POST() {
   // Skip non-PDF files
   const ext = candidate.fileName.toLowerCase().match(/\.[^.]+$/)?.[0] ?? "";
   if (ext !== ".pdf") {
-    indexRecord[candidate.id] = { ...candidate, enrichmentSkipped: true };
-    await kv.set("cv:index", indexRecord);
-    console.log(`[cv/enrich] skipped ${candidate.fileName} (${ext})`);
+    // Find the actual KV key for this candidate (by id first, then by fileName fallback)
+    const kvKey =
+      candidate.id && indexRecord[candidate.id]?.fileName === candidate.fileName
+        ? candidate.id
+        : Object.keys(indexRecord).find((k) => indexRecord[k].fileName === candidate.fileName);
+
+    if (kvKey) {
+      indexRecord[kvKey] = { ...indexRecord[kvKey], enrichmentSkipped: true };
+    } else {
+      console.warn(`[cv/enrich] could not find KV key for ${candidate.fileName} — skipping without persisting`);
+    }
+
+    await kv.set("cv:index", indexRecord, { ex: 60 * 60 * 24 * 30 });
+    console.log(`[cv/enrich] skipped ${candidate.fileName} (${ext}), kvKey=${kvKey}`);
     return NextResponse.json({ skipped: candidate.fileName, remaining: countAfter });
   }
 
