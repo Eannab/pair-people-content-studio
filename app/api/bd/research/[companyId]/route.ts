@@ -3,6 +3,8 @@ import Anthropic from "@anthropic-ai/sdk";
 import { kv } from "@vercel/kv";
 import type { BDLead, AustraliaPresence } from "@/app/api/bd/signals/route";
 
+export const maxDuration = 60;
+
 const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
 
 async function braveSearch(query: string): Promise<string> {
@@ -35,20 +37,34 @@ async function braveSearch(query: string): Promise<string> {
 }
 
 export async function POST(
-  _request: NextRequest,
+  request: NextRequest,
   { params }: { params: Promise<{ companyId: string }> }
 ) {
   try {
     const { companyId } = await params;
+    const body = await request.json().catch(() => ({})) as { companyName?: string };
 
-    const leads = await kv.get<BDLead[]>("bd:leads");
-    if (!leads) {
-      return NextResponse.json({ error: "No leads found" }, { status: 404 });
-    }
+    const leads = await kv.get<BDLead[]>("bd:leads") ?? [];
+    let lead = leads.find((l) => l.id === companyId);
 
-    const lead = leads.find((l) => l.id === companyId);
     if (!lead) {
-      return NextResponse.json({ error: "Lead not found" }, { status: 404 });
+      // Stub lead from View Brief fallback — create it inline using the provided name
+      const companyName = body.companyName ?? companyId;
+      lead = {
+        id: companyId,
+        companyName,
+        sector: "general",
+        signals: [],
+        australiaPresence: { basedInAustralia: false, hiringInAustralia: false, detail: "" },
+        overview: "",
+        techStack: [],
+        recentActivity: "",
+        relevanceScore: 5,
+        relevanceReason: "",
+        hiringContact: { name: "", title: "", linkedInUrl: "" },
+        confidence: "medium",
+        createdAt: new Date().toISOString(),
+      };
     }
 
     const signalContext = lead.signals
@@ -153,7 +169,10 @@ Rules:
       researchedAt: now,
     };
 
-    const updatedLeads = leads.map((l) => (l.id === companyId ? updatedLead : l));
+    const exists = leads.some((l) => l.id === companyId);
+    const updatedLeads = exists
+      ? leads.map((l) => (l.id === companyId ? updatedLead : l))
+      : [...leads, updatedLead];
 
     try {
       await kv.set("bd:leads", updatedLeads, { ex: 60 * 60 * 24 * 30 });

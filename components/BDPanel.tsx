@@ -505,11 +505,12 @@ interface LeadDetailProps {
   onLeadUpdate?: (updated: BDLead) => void;
 }
 
-function LeadDetail({ lead, onBack }: LeadDetailProps) {
+function LeadDetail({ lead, onBack, onLeadUpdate }: LeadDetailProps) {
   const [draft, setDraft] = useState("");
   const [isDrafting, setIsDrafting] = useState(false);
   const [draftError, setDraftError] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
+  const [isResearching, setIsResearching] = useState(false);
   const ap = lead.australiaPresence;
 
   // Load the user's saved draft on mount
@@ -520,6 +521,30 @@ function LeadDetail({ lead, onBack }: LeadDetailProps) {
         if (data.draft) setDraft(data.draft);
       })
       .catch(() => {});
+  }, [lead.id]);
+
+  // Auto-trigger research if brief is empty
+  React.useEffect(() => {
+    if (lead.overview || lead.researchedAt) return;
+    setIsResearching(true);
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 55000);
+    fetch(`/api/bd/research/${lead.id}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ companyName: lead.companyName }),
+      signal: controller.signal,
+    })
+      .then((r) => r.ok ? r.json() : null)
+      .then((data) => {
+        if (data?.lead && onLeadUpdate) onLeadUpdate(data.lead);
+      })
+      .catch(() => {})
+      .finally(() => {
+        clearTimeout(timeout);
+        setIsResearching(false);
+      });
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [lead.id]);
 
   const generateDraft = async () => {
@@ -580,6 +605,15 @@ function LeadDetail({ lead, onBack }: LeadDetailProps) {
             />
           )}
           <ConfidenceDot confidence={lead.confidence} />
+          {isResearching && (
+            <span className="flex items-center gap-1.5 text-xs" style={{ color: "#6F92BF" }}>
+              <svg className="w-3.5 h-3.5 animate-spin" fill="none" viewBox="0 0 24 24">
+                <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+              </svg>
+              Researching…
+            </span>
+          )}
         </div>
         <div className="flex flex-wrap gap-2">
           {lead.signals.map((s, i) => (
@@ -1465,14 +1499,22 @@ export default function BDPanel({ onCreatePost }: BDPanelProps) {
 
   const researchLead = async (lead: BDLead) => {
     setResearchingIds((prev) => new Set(prev).add(lead.id));
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 55000);
     try {
-      const res = await fetch(`/api/bd/research/${lead.id}`, { method: "POST" });
+      const res = await fetch(`/api/bd/research/${lead.id}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ companyName: lead.companyName }),
+        signal: controller.signal,
+      });
       if (!res.ok) return;
       const data = await res.json();
       setLeads((prev) => prev.map((l) => (l.id === lead.id ? data.lead : l)));
     } catch {
-      // Research failed — keep partial lead
+      // Research failed or timed out — keep partial lead
     } finally {
+      clearTimeout(timeout);
       setResearchingIds((prev) => {
         const next = new Set(prev);
         next.delete(lead.id);
