@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useRef } from "react";
 import { useSession, signIn, signOut } from "next-auth/react";
 import type { ScoredArticle } from "@/app/api/newsletters/scan/route";
 import type { NewsletterSender } from "@/app/api/newsletters/senders/route";
@@ -616,6 +616,137 @@ function MarketInsightTab({
   );
 }
 
+// ── Email file parsing helpers ────────────────────────────────────────────────
+
+function stripHtml(html: string): string {
+  return html
+    .replace(/<style[^>]*>[\s\S]*?<\/style>/gi, "")
+    .replace(/<script[^>]*>[\s\S]*?<\/script>/gi, "")
+    .replace(/<[^>]+>/g, " ")
+    .replace(/&nbsp;/gi, " ")
+    .replace(/&amp;/gi, "&")
+    .replace(/&lt;/gi, "<")
+    .replace(/&gt;/gi, ">")
+    .replace(/&quot;/gi, '"')
+    .replace(/&#39;/gi, "'")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function decodeRfc2047(value: string): string {
+  return value.replace(/=\?([^?]+)\?([BQbq])\?([^?]+)\?=/g, (_, charset, enc, encoded) => {
+    try {
+      if (enc.toUpperCase() === "B") {
+        const bytes = atob(encoded);
+        return new TextDecoder(charset).decode(new Uint8Array([...bytes].map((c) => c.charCodeAt(0))));
+      } else {
+        return encoded
+          .replace(/_/g, " ")
+          .replace(/=([0-9A-Fa-f]{2})/g, (_: string, h: string) => String.fromCharCode(parseInt(h, 16)));
+      }
+    } catch {
+      return value;
+    }
+  });
+}
+
+async function parseMsgFile(file: File): Promise<{ text: string; subject: string; sender: string }> {
+  // Dynamic import avoids SSR issues — msgreader uses Buffer internals
+  const { default: MsgReader } = await import("msgreader");
+  const buffer = await file.arrayBuffer();
+  const reader = new MsgReader(buffer);
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const data = reader.getFileData() as any;
+  const htmlBody: string | undefined = data.bodyHTML;
+  const plainBody: string | undefined = data.body;
+  const text = htmlBody ? stripHtml(htmlBody) : (plainBody ?? "");
+  return {
+    text,
+    subject: data.subject || file.name,
+    sender: data.senderName || data.senderSmtpAddress || data.senderEmail || "Unknown sender",
+  };
+}
+
+async function parseEmlFile(file: File): Promise<{ text: string; subject: string; sender: string }> {
+  const raw = await file.text();
+  const lines = raw.split(/\r?\n/);
+
+  // Parse RFC 2822 headers (handles folded header lines)
+  const headers: Record<string, string> = {};
+  let i = 0;
+  let lastKey = "";
+  while (i < lines.length) {
+    const line = lines[i];
+    if (line === "") break;
+    if (/^\s/.test(line) && lastKey) {
+      headers[lastKey] = (headers[lastKey] ?? "") + " " + line.trim();
+    } else {
+      const sep = line.indexOf(":");
+      if (sep > 0) {
+        lastKey = line.slice(0, sep).toLowerCase();
+        headers[lastKey] = line.slice(sep + 1).trim();
+      }
+    }
+    i++;
+  }
+
+  const subject = decodeRfc2047(headers["subject"] || file.name);
+  const sender = decodeRfc2047(headers["from"] || "Unknown sender");
+  const contentType = headers["content-type"] || "text/plain";
+  const encoding = (headers["content-transfer-encoding"] || "").toLowerCase();
+  const bodyRaw = lines.slice(i + 1).join("\n");
+
+  function decodeTransfer(text: string, enc: string): string {
+    if (enc === "base64") {
+      try { return atob(text.replace(/\s/g, "")); } catch { return text; }
+    }
+    if (enc === "quoted-printable") {
+      return text
+        .replace(/=\r?\n/g, "")
+        .replace(/=([0-9A-Fa-f]{2})/g, (_, h) => String.fromCharCode(parseInt(h, 16)));
+    }
+    return text;
+  }
+
+  // Handle multipart MIME
+  const boundaryMatch = contentType.match(/boundary="?([^";,\r\n]+)"?/i);
+  if (boundaryMatch) {
+    const boundary = boundaryMatch[1].trim();
+    const escaped = boundary.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    const parts = bodyRaw.split(new RegExp("--" + escaped + "(?:--|\\r?\\n)"));
+    let htmlBody = "";
+    let plainBody = "";
+
+    for (const part of parts) {
+      if (!part.trim() || part.trim() === "--") continue;
+      const partLines = part.split(/\r?\n/);
+      const partHeaders: Record<string, string> = {};
+      let pi = 0;
+      while (pi < partLines.length && partLines[pi].trim() !== "") {
+        const sep = partLines[pi].indexOf(":");
+        if (sep > 0) {
+          partHeaders[partLines[pi].slice(0, sep).toLowerCase().trim()] = partLines[pi].slice(sep + 1).trim();
+        }
+        pi++;
+      }
+      const partBody = partLines.slice(pi + 1).join("\n").trimEnd();
+      const partType = partHeaders["content-type"] || "text/plain";
+      const partEnc = (partHeaders["content-transfer-encoding"] || "").toLowerCase();
+      const decoded = decodeTransfer(partBody, partEnc);
+      if (partType.includes("text/html")) htmlBody = decoded;
+      else if (partType.includes("text/plain")) plainBody = decoded;
+    }
+
+    const text = plainBody || (htmlBody ? stripHtml(htmlBody) : bodyRaw);
+    return { text: text.trim(), subject, sender };
+  }
+
+  // Single-part body
+  const decoded = decodeTransfer(bodyRaw, encoding);
+  const text = contentType.includes("text/html") ? stripHtml(decoded) : decoded;
+  return { text: text.trim(), subject, sender };
+}
+
 // ── Add Articles tab ─────────────────────────────────────────────────────────
 
 interface ManualResult {
@@ -638,21 +769,48 @@ function AddArticlesTab({
   const [isProcessing, setIsProcessing] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [result, setResult] = useState<ManualResult | null>(null);
+  const [emailMeta, setEmailMeta] = useState<{ subject: string; sender: string } | null>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+
+  const handleEmailFile = async (file: File) => {
+    setError(null);
+    try {
+      const parsed = file.name.toLowerCase().endsWith(".msg")
+        ? await parseMsgFile(file)
+        : await parseEmlFile(file);
+      setContent(parsed.text);
+      setEmailMeta({ subject: parsed.subject, sender: parsed.sender });
+    } catch (err) {
+      setError(`Failed to read email file: ${err instanceof Error ? err.message : "Unknown error"}`);
+    }
+  };
 
   const handleDrop = (e: React.DragEvent) => {
     e.preventDefault();
     setIsDragOver(false);
-    // Accept dragged text files
     const file = e.dataTransfer.files[0];
-    if (file && file.type.startsWith("text/")) {
-      const reader = new FileReader();
-      reader.onload = (ev) => setContent((ev.target?.result as string) ?? "");
-      reader.readAsText(file);
-    } else {
-      // Accept dragged plain text
-      const text = e.dataTransfer.getData("text/plain");
-      if (text) setContent((prev) => (prev ? prev + "\n\n" + text : text));
+    if (file) {
+      const name = file.name.toLowerCase();
+      if (name.endsWith(".msg") || name.endsWith(".eml")) {
+        handleEmailFile(file);
+        return;
+      }
+      if (file.type.startsWith("text/")) {
+        const reader = new FileReader();
+        reader.onload = (ev) => { setContent((ev.target?.result as string) ?? ""); setEmailMeta(null); };
+        reader.readAsText(file);
+        return;
+      }
     }
+    // Accept dragged plain text
+    const text = e.dataTransfer.getData("text/plain");
+    if (text) { setContent((prev) => (prev ? prev + "\n\n" + text : text)); setEmailMeta(null); }
+  };
+
+  const handleFileInput = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (file) handleEmailFile(file);
+    e.target.value = "";
   };
 
   const handleSubmit = async () => {
@@ -707,12 +865,49 @@ function AddArticlesTab({
 
       {/* Content drop zone */}
       <div>
-        <label
-          className="block text-xs font-semibold uppercase tracking-wider mb-1.5"
-          style={{ color: "#323B6A", fontFamily: "var(--font-poppins), Poppins, sans-serif" }}
-        >
-          Article Content
-        </label>
+        <div className="flex items-center justify-between mb-1.5">
+          <label
+            className="block text-xs font-semibold uppercase tracking-wider"
+            style={{ color: "#323B6A", fontFamily: "var(--font-poppins), Poppins, sans-serif" }}
+          >
+            Article Content
+          </label>
+          <button
+            type="button"
+            onClick={() => fileInputRef.current?.click()}
+            className="text-xs transition-colors"
+            style={{ color: "#6F92BF" }}
+            onMouseEnter={(e) => { (e.currentTarget as HTMLButtonElement).style.color = "#323B6A"; }}
+            onMouseLeave={(e) => { (e.currentTarget as HTMLButtonElement).style.color = "#6F92BF"; }}
+          >
+            Browse .msg / .eml
+          </button>
+          <input
+            ref={fileInputRef}
+            type="file"
+            accept=".msg,.eml"
+            className="hidden"
+            onChange={handleFileInput}
+          />
+        </div>
+
+        {/* Email metadata banner */}
+        {emailMeta && (
+          <div
+            className="flex items-start gap-2 px-3 py-2 rounded-lg mb-2 text-xs"
+            style={{ backgroundColor: "#F0F5EC", border: "1px solid #BDCF7C" }}
+          >
+            <svg className="w-3.5 h-3.5 mt-0.5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24" style={{ color: "#323B6A" }}>
+              <rect x="2" y="4" width="20" height="16" rx="2" strokeWidth="1.8" />
+              <path d="M2 8l10 6 10-6" strokeWidth="1.8" strokeLinecap="round" />
+            </svg>
+            <div style={{ color: "#323B6A" }}>
+              <span className="font-semibold">{emailMeta.subject}</span>
+              <span style={{ color: "#6F92BF" }}> · {emailMeta.sender}</span>
+            </div>
+          </div>
+        )}
+
         <div
           onDragOver={(e) => { e.preventDefault(); setIsDragOver(true); }}
           onDragLeave={() => setIsDragOver(false)}
@@ -725,8 +920,8 @@ function AddArticlesTab({
         >
           <textarea
             value={content}
-            onChange={(e) => setContent(e.target.value)}
-            placeholder="Paste article text here, or drag and drop a text file…"
+            onChange={(e) => { setContent(e.target.value); if (!e.target.value) setEmailMeta(null); }}
+            placeholder="Paste newsletter text, drop a URL, or drag an Outlook email (.msg)"
             rows={9}
             className="w-full px-4 py-3 rounded-xl text-sm outline-none resize-none bg-transparent"
             style={{ color: "#323B6A" }}
@@ -737,7 +932,7 @@ function AddArticlesTab({
               style={{ backgroundColor: "rgba(240,245,236,0.8)" }}
             >
               <p className="text-sm font-semibold" style={{ color: "#323B6A" }}>
-                Drop to paste content
+                Drop .msg, .eml, or text file
               </p>
             </div>
           )}
