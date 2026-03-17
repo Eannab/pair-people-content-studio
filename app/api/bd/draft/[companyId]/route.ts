@@ -42,8 +42,9 @@ export async function POST(
 
   try {
     const { companyId } = await params;
-    const body = await request.json().catch(() => ({})) as { type?: "candidate" | "intro" };
+    const body = await request.json().catch(() => ({})) as { type?: "candidate" | "intro"; candidateIndex?: number };
     const type: "candidate" | "intro" = body.type ?? "candidate";
+    const candidateIndex = Math.max(0, body.candidateIndex ?? 0);
 
     const [leads, preferences, outreachVoiceContext] = await Promise.all([
       kv.get<BDLead[]>("bd:leads"),
@@ -76,8 +77,9 @@ export async function POST(
 
     if (type === "candidate") {
       // ── Option 1: Candidate Sell ──────────────────────────────────────────────
-      cvMatches = await getTopCVMatches(lead, 1, 7);
-      const candidate = cvMatches[0]?.candidate ?? null;
+      cvMatches = await getTopCVMatches(lead, 3, 7);
+      const candidate = cvMatches[candidateIndex]?.candidate ?? cvMatches[0]?.candidate ?? null;
+      const matchUsed = cvMatches[candidateIndex] ?? cvMatches[0] ?? null;
 
       const leadStack = lead.techStack.map((t) => t.toLowerCase());
       const relevantSkills = candidate
@@ -102,13 +104,20 @@ export async function POST(
         ? `currently at ${candidate.currentEmployer}`
         : "";
 
+      // Strip candidate name from the fit reason — identity stays confidential in the email
+      const anonFitReason = matchUsed
+        ? matchUsed.fitExplanation.replace(
+            new RegExp(candidate!.name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "g"),
+            "this candidate"
+          )
+        : "";
+
       const candidateBlock = candidate
-        ? `Candidate to pitch:
-- Name: ${candidate.name}
+        ? `Candidate to pitch (CONFIDENTIAL — never include their name in the email):
 - Role: ${candidate.seniority} ${candidate.currentRole}${employerLine ? `, ${employerLine}` : ""}
 - Experience: ${candidate.yearsExperience} years
 - Relevant skills (matched to ${lead.companyName}'s stack): ${skillsToShow.join(", ")}
-- Fit reason: ${cvMatches[0].fitExplanation}`
+- Why they match: ${anonFitReason}`
         : "";
 
       promptContent = `Write a cold outreach email from Éanna (co-founder, Pair People) to the hiring contact at ${lead.companyName}.
@@ -125,6 +134,8 @@ ${candidateBlock}
 ${voiceSection}${prefSection}
 
 STRICT RULES — follow every one without exception:
+
+CONFIDENTIALITY: Never use the candidate's name in the email. Refer to them by role, seniority, and employer only. Their identity is not disclosed until the client engages.
 
 1. MAXIMUM 100 WORDS TOTAL. Count carefully. Cut ruthlessly.
 
@@ -144,11 +155,11 @@ STRICT RULES — follow every one without exception:
 
 4. STRUCTURE:
    - 1 sentence: what the company builds + the hook (role or growth signal)
-   - 1 sentence: introduce the candidate by name, role, and current/recent employer
+   - 1 sentence: introduce the candidate by role and current/recent employer — NO name
    - 2-3 tight bullet points: candidate's skills and experience relevant to ${lead.companyName}'s stack and sector
    - 1 closing line
 
-5. CANDIDATE INTRO SENTENCE must include their current or most recent employer if known: "I have [Name], a [seniority] [role] currently at [Employer]" or "just left [Employer]".
+5. CANDIDATE INTRO SENTENCE: "I have a [seniority] [role] currently at [Employer]" — never include their name. Example: "I have a Senior Hardware Engineer currently at Intel who's immediately available."
 
 6. BULLET POINTS: Only used for the candidate's specific skills, experience, and background. Never for Pair People's services, process, or value proposition.
 

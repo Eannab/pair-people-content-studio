@@ -3,6 +3,7 @@
 import React, { useState, useEffect, useRef, useCallback } from "react";
 import type { BDLead, CompanySignal, MarketInsightSignal } from "@/app/api/bd/signals/route";
 import type { PipelineLead } from "@/app/api/bd/pipeline/route";
+import type { CVMatch } from "@/lib/cv-context";
 
 // ── Sub-components ────────────────────────────────────────────────────────────
 
@@ -534,6 +535,8 @@ function LeadDetail({ lead, onBack, onLeadUpdate }: LeadDetailProps) {
   const [draftError, setDraftError] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
   const [isResearching, setIsResearching] = useState(false);
+  const [candidateMatches, setCandidateMatches] = useState<CVMatch[]>([]);
+  const [activeCandidateIndex, setActiveCandidateIndex] = useState(0);
 
   const activeDraft = activeDraftType === "candidate" ? candidateDraft : introDraft;
   const setActiveDraft = (val: string) => {
@@ -577,7 +580,7 @@ function LeadDetail({ lead, onBack, onLeadUpdate }: LeadDetailProps) {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [lead.id]);
 
-  const generateDraft = async (type: "candidate" | "intro") => {
+  const generateDraft = async (type: "candidate" | "intro", candidateIndex = 0) => {
     setActiveDraftType(type);
     setIsDrafting(true);
     setDraftError(null);
@@ -585,12 +588,19 @@ function LeadDetail({ lead, onBack, onLeadUpdate }: LeadDetailProps) {
       const res = await fetch(`/api/bd/draft/${lead.id}`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ type }),
+        body: JSON.stringify({ type, ...(type === "candidate" ? { candidateIndex } : {}) }),
       });
       if (!res.ok) throw new Error("Draft generation failed");
       const data = await res.json();
-      if (type === "candidate") setCandidateDraft(data.draft);
-      else setIntroDraft(data.draft);
+      if (type === "candidate") {
+        setCandidateDraft(data.draft);
+        if (data.cvMatches?.length > 0) {
+          setCandidateMatches(data.cvMatches);
+          setActiveCandidateIndex(candidateIndex);
+        }
+      } else {
+        setIntroDraft(data.draft);
+      }
     } catch (err) {
       setDraftError(err instanceof Error ? err.message : "Draft failed");
     } finally {
@@ -914,6 +924,125 @@ function LeadDetail({ lead, onBack, onLeadUpdate }: LeadDetailProps) {
             )}
           </button>
         </div>
+
+        {/* ── Matched candidate (internal, candidate mode only) ── */}
+        {activeDraftType === "candidate" && candidateMatches.length > 0 && (() => {
+          const primary = candidateMatches[activeCandidateIndex] ?? candidateMatches[0];
+          const c = primary.candidate;
+          const others = candidateMatches.filter((_, i) => i !== activeCandidateIndex);
+          return (
+            <div className="mb-4 space-y-3">
+              {/* Primary match */}
+              <div
+                className="rounded-xl p-4"
+                style={{ backgroundColor: "#F9FAFB", border: "1.5px dashed #A7B8D1" }}
+              >
+                <div className="flex items-center gap-2 mb-3">
+                  <span
+                    className="text-xs font-semibold uppercase tracking-wider"
+                    style={{ color: "#6F92BF", fontFamily: "var(--font-poppins), Poppins, sans-serif" }}
+                  >
+                    Matched Candidate
+                  </span>
+                  <span
+                    className="text-xs px-2 py-0.5 rounded-full"
+                    style={{ backgroundColor: "#E7EDF3", color: "#A7B8D1", fontFamily: "var(--font-poppins), Poppins, sans-serif" }}
+                  >
+                    Internal only
+                  </span>
+                  <span
+                    className="ml-auto text-xs font-semibold px-2 py-0.5 rounded-full"
+                    style={{
+                      backgroundColor: primary.score >= 8 ? "#F0F5EC" : "#FEFCE8",
+                      color: primary.score >= 8 ? "#4A6B3A" : "#92400E",
+                    }}
+                  >
+                    {primary.score}/10 match
+                  </span>
+                </div>
+
+                <div className="flex items-start justify-between gap-2 mb-2">
+                  <div>
+                    <p className="text-sm font-semibold" style={{ color: "#323B6A", fontFamily: "var(--font-poppins), Poppins, sans-serif" }}>
+                      {c.name}
+                    </p>
+                    <p className="text-xs mt-0.5" style={{ color: "#6F92BF" }}>
+                      {c.seniority.charAt(0).toUpperCase() + c.seniority.slice(1)} {c.currentRole}
+                      {c.currentEmployer ? ` · ${c.currentEmployer}` : ""}
+                      {" · "}{c.yearsExperience} yrs exp
+                    </p>
+                  </div>
+                </div>
+
+                <div className="flex flex-wrap gap-1 mb-2">
+                  {c.skills.slice(0, 5).map((skill) => (
+                    <span
+                      key={skill}
+                      className="text-xs px-2 py-0.5 rounded-md"
+                      style={{ backgroundColor: "#E7EDF3", color: "#323B6A" }}
+                    >
+                      {skill}
+                    </span>
+                  ))}
+                </div>
+
+                <p className="text-xs italic" style={{ color: "#A7B8D1" }}>
+                  {primary.fitExplanation}
+                </p>
+              </div>
+
+              {/* Alternative matches */}
+              {others.length > 0 && (
+                <div>
+                  <p className="text-xs font-semibold mb-2" style={{ color: "#A7B8D1", fontFamily: "var(--font-poppins), Poppins, sans-serif" }}>
+                    Other matches
+                  </p>
+                  <div className="space-y-2">
+                    {others.map((match) => {
+                      const idx = candidateMatches.indexOf(match);
+                      const mc = match.candidate;
+                      return (
+                        <div
+                          key={mc.id}
+                          className="flex items-center justify-between gap-3 px-3 py-2.5 rounded-xl"
+                          style={{ backgroundColor: "#FFFFFF", border: "1.5px solid #E7EDF3" }}
+                        >
+                          <div className="min-w-0">
+                            <p className="text-xs font-semibold truncate" style={{ color: "#323B6A" }}>
+                              {mc.name}
+                            </p>
+                            <p className="text-xs truncate" style={{ color: "#6F92BF" }}>
+                              {mc.seniority.charAt(0).toUpperCase() + mc.seniority.slice(1)} {mc.currentRole}
+                              {mc.currentEmployer ? ` · ${mc.currentEmployer}` : ""}
+                            </p>
+                          </div>
+                          <div className="flex items-center gap-2 flex-shrink-0">
+                            <span className="text-xs" style={{ color: "#A7B8D1" }}>
+                              {match.score}/10
+                            </span>
+                            <button
+                              onClick={() => generateDraft("candidate", idx)}
+                              disabled={isDrafting}
+                              className="text-xs px-2.5 py-1.5 rounded-lg font-semibold transition-all"
+                              style={{
+                                backgroundColor: isDrafting ? "#E7EDF3" : "#323B6A",
+                                color: isDrafting ? "#A7B8D1" : "#FFFFFF",
+                                fontFamily: "var(--font-poppins), Poppins, sans-serif",
+                                cursor: isDrafting ? "not-allowed" : "pointer",
+                              }}
+                            >
+                              {isDrafting ? "…" : "Use instead"}
+                            </button>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
+            </div>
+          );
+        })()}
 
         {draftError && (
           <div
