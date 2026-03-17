@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState, useEffect, useCallback } from "react";
+import React, { useState, useEffect, useCallback, useRef } from "react";
 import { useSession, signIn } from "next-auth/react";
 import type { CVCandidate } from "@/lib/cv-context";
 import type { LinkedInIntelligenceReport, LinkedInInsight } from "@/lib/linkedin-insights-context";
@@ -38,7 +38,8 @@ function CVIntelligenceTab() {
   const [isScanning, setIsScanning] = useState(false);
   const [scanProgress, setScanProgress] = useState<{ scanned: number; total: number } | null>(null);
   const [isEnriching, setIsEnriching] = useState(false);
-  const [enrichProgress, setEnrichProgress] = useState<{ enriched: number; total: number } | null>(null);
+  const [enrichProgress, setEnrichProgress] = useState<{ enriched: number; total: number; processing?: string } | null>(null);
+  const stopEnrichRef = useRef(false);
   const [isSavingPath, setIsSavingPath] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [lastIndexed, setLastIndexed] = useState<string | null>(null);
@@ -145,13 +146,26 @@ function CVIntelligenceTab() {
 
   const enrichCVs = async () => {
     if (!session?.accessToken || session?.error === "RefreshAccessTokenError") return;
+    stopEnrichRef.current = false;
     setIsEnriching(true);
     setError(null);
-    setEnrichProgress(null);
+
+    // Fetch total count first so we can show X / total
+    let total = candidates.length;
+    try {
+      const statsRes = await fetch("/api/cv/enrich");
+      if (statsRes.ok) {
+        const stats = await statsRes.json();
+        total = stats.total ?? total;
+      }
+    } catch { /* ignore */ }
+
+    let enrichedCount = total - (candidates.filter((c) => !c.enriched && !c.enrichmentSkipped && !c.enrichmentError).length);
+    setEnrichProgress({ enriched: enrichedCount, total });
 
     try {
       let done = false;
-      while (!done) {
+      while (!done && !stopEnrichRef.current) {
         const res = await fetch("/api/cv/enrich", { method: "POST" });
 
         const bodyText = await res.text().catch(() => "");
@@ -165,11 +179,22 @@ function CVIntelligenceTab() {
         if (res.status === 401) { signIn("azure-ad"); return; }
         if (!res.ok) throw new Error((data.error as string) ?? "Enrichment failed");
 
-        const total = (data.total as number) ?? 0;
+        done = (data.done as boolean) ?? false;
         const remaining = (data.remaining as number) ?? 0;
-        done = (data.done as boolean) ?? true;
 
-        setEnrichProgress({ enriched: total - remaining, total });
+        if (data.enriched) {
+          enrichedCount++;
+          setEnrichProgress({ enriched: enrichedCount, total, processing: data.enriched as string });
+        } else if (data.skipped || data.failed) {
+          // skipped/failed: remaining already decremented in API, just update display
+          setEnrichProgress({ enriched: enrichedCount, total, processing: (data.skipped ?? data.failed) as string });
+        }
+
+        if (remaining === 0) done = true;
+
+        if (!done && !stopEnrichRef.current) {
+          await new Promise((resolve) => setTimeout(resolve, 3000));
+        }
       }
       await loadIndex();
     } catch (err) {
@@ -177,6 +202,7 @@ function CVIntelligenceTab() {
     } finally {
       setIsEnriching(false);
       setEnrichProgress(null);
+      stopEnrichRef.current = false;
     }
   };
 
@@ -276,34 +302,45 @@ function CVIntelligenceTab() {
               </>
             )}
           </button>
-          <button
-            onClick={enrichCVs}
-            disabled={isScanning || isEnriching || !session?.accessToken || session?.error === "RefreshAccessTokenError"}
-            className="flex items-center gap-2 px-4 py-2.5 rounded-xl text-sm font-semibold"
-            style={{
-              backgroundColor: isScanning || isEnriching || !session?.accessToken || session?.error === "RefreshAccessTokenError" ? PALE : GREEN,
-              color: isScanning || isEnriching || !session?.accessToken || session?.error === "RefreshAccessTokenError" ? LIGHT_BLUE : NAVY,
-              fontFamily: "var(--font-poppins), Poppins, sans-serif",
-              cursor: isScanning || isEnriching || !session?.accessToken || session?.error === "RefreshAccessTokenError" ? "not-allowed" : "pointer",
-            }}
-          >
-            {isEnriching ? (
-              <>
-                <svg className="w-4 h-4 animate-spin" fill="none" viewBox="0 0 24 24">
-                  <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
-                  <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
-                </svg>
-                {enrichProgress ? `Enriching ${enrichProgress.enriched} / ${enrichProgress.total}…` : "Starting enrichment…"}
-              </>
-            ) : (
-              <>
-                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9.663 17h4.673M12 3v1m6.364 1.636l-.707.707M21 12h-1M4 12H3m3.343-5.657l-.707-.707m2.828 9.9a5 5 0 117.072 0l-.347.347a3.001 3.001 0 00-.765 1.965v.201a2 2 0 01-2 2h-1.172a2 2 0 01-2-2v-.201a3.001 3.001 0 00-.765-1.965l-.347-.347z" />
-                </svg>
-                Enrich CVs
-              </>
-            )}
-          </button>
+          {isEnriching ? (
+            <>
+              <button
+                onClick={() => { stopEnrichRef.current = true; }}
+                className="flex items-center gap-2 px-4 py-2.5 rounded-xl text-sm font-semibold"
+                style={{
+                  backgroundColor: "#FFF0F0",
+                  color: "#CC4444",
+                  border: "1px solid #FFCCCC",
+                  fontFamily: "var(--font-poppins), Poppins, sans-serif",
+                  cursor: "pointer",
+                }}
+              >
+                Stop
+              </button>
+              <span className="text-xs max-w-[200px] truncate" style={{ color: LIGHT_BLUE }}>
+                {enrichProgress
+                  ? `Enriched ${enrichProgress.enriched} / ${enrichProgress.total}${enrichProgress.processing ? ` — ${enrichProgress.processing}` : "…"}`
+                  : "Starting…"}
+              </span>
+            </>
+          ) : (
+            <button
+              onClick={enrichCVs}
+              disabled={isScanning || !session?.accessToken || session?.error === "RefreshAccessTokenError"}
+              className="flex items-center gap-2 px-4 py-2.5 rounded-xl text-sm font-semibold"
+              style={{
+                backgroundColor: isScanning || !session?.accessToken || session?.error === "RefreshAccessTokenError" ? PALE : GREEN,
+                color: isScanning || !session?.accessToken || session?.error === "RefreshAccessTokenError" ? LIGHT_BLUE : NAVY,
+                fontFamily: "var(--font-poppins), Poppins, sans-serif",
+                cursor: isScanning || !session?.accessToken || session?.error === "RefreshAccessTokenError" ? "not-allowed" : "pointer",
+              }}
+            >
+              <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9.663 17h4.673M12 3v1m6.364 1.636l-.707.707M21 12h-1M4 12H3m3.343-5.657l-.707-.707m2.828 9.9a5 5 0 117.072 0l-.347.347a3.001 3.001 0 00-.765 1.965v.201a2 2 0 01-2 2h-1.172a2 2 0 01-2-2v-.201a3.001 3.001 0 00-.765-1.965l-.347-.347z" />
+              </svg>
+              Enrich CVs
+            </button>
+          )}
         </div>
       </div>
 
