@@ -291,8 +291,16 @@ export async function POST() {
     const inboxData = await inboxRes.json();
     const allMessages: GraphMessage[] = inboxData.value ?? [];
 
+    // 1. Total emails fetched
+    console.log(`[newsletters/scan] fetched ${allMessages.length} emails from Outlook (last 30 days)`);
+
     // 4. Filter by approved senders
     const matching = allMessages.filter((m) => matchesSender(m, senders));
+
+    // 2. Matched senders
+    console.log(`[newsletters/scan] ${matching.length} emails matched approved senders`);
+    const matchedSenderNames = [...new Set(matching.map((m) => m.from.emailAddress.name))];
+    console.log(`[newsletters/scan] matched sender names: ${matchedSenderNames.join(", ") || "(none)"}`);
 
     if (matching.length === 0) {
       const scannedAt = new Date().toISOString();
@@ -326,9 +334,16 @@ export async function POST() {
     );
 
     const allExtracted: ExtractedArticle[] = [];
-    extractionResults.forEach((r) => {
-      if (r.status === "fulfilled") allExtracted.push(...r.value);
+    extractionResults.forEach((r, i) => {
+      if (r.status === "fulfilled") {
+        // 3. Articles extracted per email
+        console.log(`[newsletters/scan] "${toProcess[i].subject}" → ${r.value.length} articles extracted`);
+        allExtracted.push(...r.value);
+      } else {
+        console.warn(`[newsletters/scan] extraction failed for "${toProcess[i].subject}":`, r.reason);
+      }
     });
+    console.log(`[newsletters/scan] ${allExtracted.length} total articles extracted across all emails`);
 
     // 7. Score all articles in one Claude call
     const scored = await scoreArticles(allExtracted);
@@ -346,8 +361,14 @@ export async function POST() {
       await kv.set("newsletters:scanned_at", scannedAt);
     } catch {}
 
-    // 9. BD signal detection on articles scoring >= 4
+    // 4. Articles scoring >= 4
     const relevantArticles = scored.filter((a) => a.topScore >= 4);
+    console.log(`[newsletters/scan] ${scored.length} articles scored — ${relevantArticles.length} scored >= 4`);
+
+    // 5. Passing to BD signal detection
+    console.log(`[newsletters/scan] passing ${relevantArticles.length} articles to detectBDSignals`);
+
+    // 9. BD signal detection on articles scoring >= 4
     let leadsAdded = 0;
     let insightsAdded = 0;
 
