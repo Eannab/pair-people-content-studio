@@ -80,10 +80,6 @@ export async function POST(
       `${lead.companyName} engineering team tech stack 2024 2025 hiring`
     );
 
-    const searchSection = searchResults
-      ? `\nWeb search results:\n${searchResults}\n`
-      : "\n(No live search data — use your knowledge up to August 2025)\n";
-
     const sectorLabel =
       lead.sector === "ai"
         ? "AI/ML engineering"
@@ -93,6 +89,64 @@ export async function POST(
         ? "healthtech"
         : "Sydney tech";
 
+    // ── No search results: lightweight fallback (faster, verified: false) ─────
+    if (!searchResults) {
+      const fallback = await anthropic.messages.create({
+        model: "claude-sonnet-4-20250514",
+        max_tokens: 400,
+        messages: [{
+          role: "user",
+          content: `Write a brief company profile for ${lead.companyName} based only on the signal below. No web search was available.
+
+Known signals:
+${signalContext || `${lead.companyName} — a ${lead.sector} company`}
+
+Return ONLY a JSON object (no markdown fences):
+{
+  "overview": "1-2 sentences based strictly on the signal context above",
+  "techStack": [],
+  "recentActivity": "based on the signal",
+  "relevanceScore": 6,
+  "relevanceReason": "one sentence on why this company may be relevant for tech recruitment",
+  "australiaPresence": {"basedInAustralia": false, "hiringInAustralia": false, "detail": "Unknown — no search data"},
+  "hiringContact": {"name": "", "title": "", "linkedInUrl": ""},
+  "companyWebsite": "",
+  "verified": false,
+  "confidence": "low"
+}`,
+        }],
+      });
+
+      const fbRaw = fallback.content[0].type === "text" ? fallback.content[0].text.trim() : "{}";
+      const fbClean = fbRaw.replace(/^```(?:json)?\n?/, "").replace(/\n?```$/, "");
+      let fbResearch: Record<string, unknown>;
+      try { fbResearch = JSON.parse(fbClean); } catch { fbResearch = {}; }
+
+      const now = new Date().toISOString();
+      const updatedLead: BDLead = {
+        ...lead,
+        overview: (fbResearch.overview as string) || lead.overview,
+        techStack: (fbResearch.techStack as string[]) || lead.techStack,
+        recentActivity: (fbResearch.recentActivity as string) || lead.recentActivity,
+        relevanceScore: (fbResearch.relevanceScore as number) ?? lead.relevanceScore,
+        relevanceReason: (fbResearch.relevanceReason as string) || lead.relevanceReason,
+        hiringContact: (fbResearch.hiringContact as BDLead["hiringContact"]) || lead.hiringContact,
+        companyWebsite: "",
+        verified: false,
+        confidence: "low",
+        researchedAt: now,
+      };
+
+      const exists = leads.some((l) => l.id === companyId);
+      const updatedLeads = exists
+        ? leads.map((l) => (l.id === companyId ? updatedLead : l))
+        : [...leads, updatedLead];
+      try { await kv.set("bd:leads", updatedLeads, { ex: 60 * 60 * 24 * 30 }); } catch {}
+
+      return NextResponse.json({ lead: updatedLead });
+    }
+
+    // ── Full research path (search results available) ─────────────────────────
     const response = await anthropic.messages.create({
       model: "claude-sonnet-4-20250514",
       max_tokens: 1500,
@@ -103,7 +157,10 @@ export async function POST(
 
 Known signals for this company:
 ${signalContext}
-${searchSection}
+
+Web search results:
+${searchResults}
+
 Return a JSON object:
 {
   "overview": "2-3 sentence company description covering what they do, company stage, and Sydney/Australia relevance",
@@ -131,9 +188,8 @@ Rules:
 - australiaPresence.detail: concise note on AU connection (e.g. "Sydney HQ", "Melbourne-based", "Hiring remotely in AU", "AU subsidiary"); use your best knowledge
 - hiringContact: the most senior person likely to receive a recruitment pitch — CTO, VP Engineering, Head of Engineering, or Founder for early-stage
 - linkedInUrl: your best guess at their LinkedIn profile URL, or empty string "" if genuinely unknown
-- companyWebsite: the company's OFFICIAL website URL extracted from search results (e.g. "https://acme.com"). Look at the search result URLs — the company homepage is usually the top result. Use empty string "" only if you genuinely cannot find it.
-- verified: true if you found a real, confirmed website for this EXACT company from search results. false if you cannot confirm the company exists or could not find a real website. Do NOT fabricate company details — only set verified: true when search results confirm this is a real company.
-- VALIDATION: You MUST find and verify the company's actual website. If you cannot find a real website for this exact company, set verified: false. Do not guess or fabricate company details.
+- companyWebsite: the company's OFFICIAL website URL extracted from search results. Look at the search result URLs — the company homepage is usually the top result. Use "" only if genuinely not found.
+- verified: true if search results confirm this is a real company with a real website. false otherwise.
 - confidence: "high" if you have solid data, "medium" if reasonable inference, "low" if mostly estimated
 - Return ONLY the JSON object — no markdown fences, no preamble.`,
         },

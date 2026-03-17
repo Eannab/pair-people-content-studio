@@ -2116,11 +2116,11 @@ export default function BDPanel({ onCreatePost }: BDPanelProps) {
       setMarketInsights(newInsights);
       setLastDetected(new Date().toISOString());
 
-      // Auto-research all BD leads, staggered 2s apart to avoid hammering the API
+      // Auto-research BD leads one at a time — wait for each to finish, 5s gap between
       (async () => {
         for (let i = 0; i < newLeads.length; i++) {
-          if (i > 0) await new Promise<void>((resolve) => setTimeout(resolve, 2000));
-          researchLead(newLeads[i]);
+          if (i > 0) await new Promise<void>((resolve) => setTimeout(resolve, 5000));
+          await researchLead(newLeads[i]);
         }
       })();
     } catch (err) {
