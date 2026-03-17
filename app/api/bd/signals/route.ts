@@ -42,6 +42,14 @@ export interface BDLead {
   outreachDraft?: string;
   outreachDraftedAt?: string;
   createdAt: string;
+  // Source tracking
+  sourceArticleTitle?: string;
+  sourceNewsletter?: string;
+  sourceDate?: string;
+  sourceEmailLink?: string;
+  // Company website & verification
+  companyWebsite?: string;
+  verified?: boolean;
 }
 
 export interface MarketInsightSignal {

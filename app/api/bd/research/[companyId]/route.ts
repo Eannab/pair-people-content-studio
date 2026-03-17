@@ -121,6 +121,8 @@ Return a JSON object:
     "title": "CTO",
     "linkedInUrl": "https://linkedin.com/in/janesmith"
   },
+  "companyWebsite": "https://acme.com",
+  "verified": true,
   "confidence": "high"
 }
 
@@ -129,6 +131,9 @@ Rules:
 - australiaPresence.detail: concise note on AU connection (e.g. "Sydney HQ", "Melbourne-based", "Hiring remotely in AU", "AU subsidiary"); use your best knowledge
 - hiringContact: the most senior person likely to receive a recruitment pitch — CTO, VP Engineering, Head of Engineering, or Founder for early-stage
 - linkedInUrl: your best guess at their LinkedIn profile URL, or empty string "" if genuinely unknown
+- companyWebsite: the company's OFFICIAL website URL extracted from search results (e.g. "https://acme.com"). Look at the search result URLs — the company homepage is usually the top result. Use empty string "" only if you genuinely cannot find it.
+- verified: true if you found a real, confirmed website for this EXACT company from search results. false if you cannot confirm the company exists or could not find a real website. Do NOT fabricate company details — only set verified: true when search results confirm this is a real company.
+- VALIDATION: You MUST find and verify the company's actual website. If you cannot find a real website for this exact company, set verified: false. Do not guess or fabricate company details.
 - confidence: "high" if you have solid data, "medium" if reasonable inference, "low" if mostly estimated
 - Return ONLY the JSON object — no markdown fences, no preamble.`,
         },
@@ -147,6 +152,8 @@ Rules:
       relevanceReason: string;
       australiaPresence?: AustraliaPresence;
       hiringContact: { name: string; title: string; linkedInUrl: string };
+      companyWebsite?: string;
+      verified?: boolean;
       confidence: "high" | "medium" | "low";
     } | null = null;
 
@@ -167,9 +174,10 @@ Rules:
       recentActivity: research!.recentActivity || lead.recentActivity,
       relevanceScore: research!.relevanceScore ?? lead.relevanceScore,
       relevanceReason: research!.relevanceReason || lead.relevanceReason,
-      // Refine australiaPresence if research found better data
       australiaPresence: research!.australiaPresence ?? lead.australiaPresence,
       hiringContact: research!.hiringContact || lead.hiringContact,
+      companyWebsite: research!.companyWebsite || lead.companyWebsite || "",
+      verified: research!.verified ?? lead.verified ?? false,
       confidence: research!.confidence || lead.confidence,
       researchedAt: now,
     };

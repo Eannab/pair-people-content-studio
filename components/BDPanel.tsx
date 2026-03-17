@@ -205,6 +205,13 @@ function LeadCard({ lead, isResearching, hasFailed, onView, onRetry }: LeadCardP
         <RelevanceBar score={lead.relevanceScore} />
       </div>
 
+      {/* Source newsletter */}
+      {lead.sourceNewsletter && (
+        <p className="text-xs" style={{ color: "#A7B8D1" }}>
+          via {lead.sourceNewsletter}
+        </p>
+      )}
+
       {/* Researched data */}
       {isResearched && (
         <>
@@ -236,7 +243,38 @@ function LeadCard({ lead, isResearching, hasFailed, onView, onRetry }: LeadCardP
               <span style={{ color: "#A7B8D1" }}>{lead.hiringContact.title}</span>
             </div>
           )}
-          <ConfidenceDot confidence={lead.confidence} />
+          <div className="flex items-center gap-2 flex-wrap">
+            <ConfidenceDot confidence={lead.confidence} />
+            {lead.researchedAt && (
+              <span
+                className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-semibold"
+                style={{
+                  backgroundColor: lead.verified ? "#F0F5EC" : "#FFFBEB",
+                  color: lead.verified ? "#4A6B3A" : "#92400E",
+                  border: `1px solid ${lead.verified ? "#BDCF7C" : "#E8A838"}`,
+                  fontFamily: "var(--font-poppins), Poppins, sans-serif",
+                }}
+              >
+                {lead.verified ? "✓ Verified" : "⚠ Unverified"}
+              </span>
+            )}
+            {lead.companyWebsite && (
+              <a
+                href={lead.companyWebsite}
+                target="_blank"
+                rel="noopener noreferrer"
+                onClick={(e) => e.stopPropagation()}
+                className="inline-flex items-center gap-1 text-xs"
+                style={{ color: "#6F92BF" }}
+                title={lead.companyWebsite}
+              >
+                <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14" />
+                </svg>
+                Website
+              </a>
+            )}
+          </div>
         </>
       )}
 
@@ -745,6 +783,70 @@ function LeadDetail({ lead, onBack, onLeadUpdate }: LeadDetailProps) {
         >
           Company Brief
         </h2>
+
+        {/* Source + website row */}
+        {(lead.sourceNewsletter || lead.companyWebsite || lead.researchedAt) && (
+          <div className="flex flex-wrap items-center gap-x-4 gap-y-2 mb-4 pb-4" style={{ borderBottom: "1px solid #F4F6FA" }}>
+            {lead.sourceNewsletter && (
+              <div className="flex items-center gap-1.5 text-xs" style={{ color: "#A7B8D1" }}>
+                <svg className="w-3.5 h-3.5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 8l7.89 5.26a2 2 0 002.22 0L21 8M5 19h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z" />
+                </svg>
+                <span>
+                  {lead.sourceEmailLink ? (
+                    <a
+                      href={lead.sourceEmailLink}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="hover:underline"
+                      style={{ color: "#6F92BF" }}
+                    >
+                      {lead.sourceNewsletter}
+                      {lead.sourceArticleTitle ? ` — ${lead.sourceArticleTitle}` : ""}
+                    </a>
+                  ) : (
+                    <span>
+                      {lead.sourceNewsletter}
+                      {lead.sourceArticleTitle ? ` — ${lead.sourceArticleTitle}` : ""}
+                    </span>
+                  )}
+                  {lead.sourceDate && (
+                    <span className="ml-1" style={{ color: "#A7B8D1" }}>
+                      · {new Date(lead.sourceDate).toLocaleDateString("en-AU", { day: "numeric", month: "short" })}
+                    </span>
+                  )}
+                </span>
+              </div>
+            )}
+            {lead.companyWebsite && (
+              <a
+                href={lead.companyWebsite}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="flex items-center gap-1 text-xs"
+                style={{ color: "#6F92BF" }}
+              >
+                <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 12a9 9 0 01-9 9m9-9a9 9 0 00-9-9m9 9H3m9 9a9 9 0 01-9-9m9 9c1.657 0 3-4.03 3-9s-1.343-9-3-9m0 18c-1.657 0-3-4.03-3-9s1.343-9 3-9" />
+                </svg>
+                {lead.companyWebsite.replace(/^https?:\/\//, "").replace(/\/$/, "")}
+              </a>
+            )}
+            {lead.researchedAt && (
+              <span
+                className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-semibold"
+                style={{
+                  backgroundColor: lead.verified ? "#F0F5EC" : "#FFFBEB",
+                  color: lead.verified ? "#4A6B3A" : "#92400E",
+                  border: `1px solid ${lead.verified ? "#BDCF7C" : "#E8A838"}`,
+                  fontFamily: "var(--font-poppins), Poppins, sans-serif",
+                }}
+              >
+                {lead.verified ? "✓ Verified" : "⚠ Unverified"}
+              </span>
+            )}
+          </div>
+        )}
 
         {lead.overview && (
           <div className="mb-4">

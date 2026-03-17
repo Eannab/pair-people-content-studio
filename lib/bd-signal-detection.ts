@@ -221,6 +221,9 @@ export interface SignalDetectionResult {
 export async function detectBDSignals(
   articles: ScoredArticle[]
 ): Promise<SignalDetectionResult> {
+  // Build lookup: article title (lowercased) → full ScoredArticle
+  const articleByTitle = new Map(articles.map((a) => [a.title.toLowerCase(), a]));
+
   // Step 1: Extract companies
   const companies = await extractCompanies(articles);
   if (companies.length === 0) return { bdLeads: [], marketInsights: [] };
@@ -251,25 +254,36 @@ export async function detectBDSignals(
 
   const now = new Date().toISOString();
 
-  const bdLeads: BDLead[] = (classified.bdLeads ?? []).map((d) => ({
-    id: uuidv4(),
-    companyName: d.companyName ?? "Unknown Company",
-    sector: (d.sector as BDLead["sector"]) ?? "general",
-    signals: d.signals ?? [],
-    australiaPresence: d.australiaPresence ?? {
-      basedInAustralia: false,
-      hiringInAustralia: false,
-      detail: "Location unclear",
-    },
-    overview: d.researchSummary ?? "",
-    techStack: [],
-    recentActivity: "",
-    relevanceScore: d.initialRelevanceScore ?? 5,
-    relevanceReason: d.researchSummary ?? "",
-    hiringContact: { name: "", title: "", linkedInUrl: "" },
-    confidence: "medium" as const,
-    createdAt: now,
-  }));
+  const bdLeads: BDLead[] = (classified.bdLeads ?? []).map((d) => {
+    const firstSignal = d.signals?.[0];
+    const sourceArticle = firstSignal?.articleTitle
+      ? articleByTitle.get(firstSignal.articleTitle.toLowerCase())
+      : undefined;
+
+    return {
+      id: uuidv4(),
+      companyName: d.companyName ?? "Unknown Company",
+      sector: (d.sector as BDLead["sector"]) ?? "general",
+      signals: d.signals ?? [],
+      australiaPresence: d.australiaPresence ?? {
+        basedInAustralia: false,
+        hiringInAustralia: false,
+        detail: "Location unclear",
+      },
+      overview: d.researchSummary ?? "",
+      techStack: [],
+      recentActivity: "",
+      relevanceScore: d.initialRelevanceScore ?? 5,
+      relevanceReason: d.researchSummary ?? "",
+      hiringContact: { name: "", title: "", linkedInUrl: "" },
+      confidence: "medium" as const,
+      createdAt: now,
+      sourceArticleTitle: firstSignal?.articleTitle ?? "",
+      sourceNewsletter: sourceArticle?.source ?? firstSignal?.articleSource ?? "",
+      sourceDate: sourceArticle?.receivedDate ?? "",
+      sourceEmailLink: sourceArticle?.webLink ?? "",
+    };
+  });
 
   const marketInsights: MarketInsightSignal[] = (classified.marketInsights ?? []).map((d) => {
     const topSignal = d.signals?.[0];
