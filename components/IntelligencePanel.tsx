@@ -618,19 +618,49 @@ function MarketInsightTab({
 
 // ── Email file parsing helpers ────────────────────────────────────────────────
 
+// Tracking URL patterns — these appear as naked URLs after DOM extraction
+const TRACKING_URL_RE =
+  /https?:\/\/(?:link|click|track|email|e|go)\.[^\s"'<>]*/gi;
+const TRACKING_PATH_RE =
+  /https?:\/\/[^\s"'<>]*\/(?:ss\/c|click|track|open|wf\/click)\/[^\s"'<>]*/gi;
+
+function htmlToText(html: string): string {
+  // DOM-based extraction — handles nested tags, entities, whitespace
+  const temp = document.createElement("div");
+  temp.innerHTML = html;
+
+  // Remove non-content nodes
+  temp.querySelectorAll("style, script, noscript, head").forEach((el) => el.remove());
+
+  // Insert newlines around block-level elements so paragraphs stay separated
+  temp
+    .querySelectorAll("p, div, br, h1, h2, h3, h4, h5, h6, li, tr, blockquote")
+    .forEach((el) => el.prepend(document.createTextNode("\n")));
+
+  const raw = temp.textContent || temp.innerText || "";
+
+  // Strip tracking URLs (beehiiv, mailchimp redirects, etc.)
+  const noTracking = raw
+    .replace(TRACKING_URL_RE, "")
+    .replace(TRACKING_PATH_RE, "");
+
+  // Clean up: trim each line, drop lines that are only punctuation/symbols
+  const lines = noTracking.split("\n").map((l) => l.trim());
+  const meaningful = lines.filter((l) => l.length > 0 && !/^[|•·—–\-=_*]+$/.test(l));
+
+  // Collapse 3+ blank lines into one blank line
+  const collapsed = meaningful.join("\n").replace(/\n{3,}/g, "\n\n").trim();
+
+  if (collapsed.length < 100) {
+    console.warn("htmlToText: result suspiciously short after cleaning", { length: collapsed.length, preview: collapsed.slice(0, 80) });
+  }
+
+  return collapsed;
+}
+
+// Kept for .eml plain-text paths (no DOM needed there, but reuse htmlToText for HTML parts)
 function stripHtml(html: string): string {
-  return html
-    .replace(/<style[^>]*>[\s\S]*?<\/style>/gi, "")
-    .replace(/<script[^>]*>[\s\S]*?<\/script>/gi, "")
-    .replace(/<[^>]+>/g, " ")
-    .replace(/&nbsp;/gi, " ")
-    .replace(/&amp;/gi, "&")
-    .replace(/&lt;/gi, "<")
-    .replace(/&gt;/gi, ">")
-    .replace(/&quot;/gi, '"')
-    .replace(/&#39;/gi, "'")
-    .replace(/\s+/g, " ")
-    .trim();
+  return htmlToText(html);
 }
 
 function decodeRfc2047(value: string): string {
@@ -659,7 +689,18 @@ async function parseMsgFile(file: File): Promise<{ text: string; subject: string
   const data = reader.getFileData() as any;
   const htmlBody: string | undefined = data.bodyHTML;
   const plainBody: string | undefined = data.body;
-  const text = htmlBody ? stripHtml(htmlBody) : (plainBody ?? "");
+
+  let text: string;
+  if (htmlBody) {
+    // Always prefer HTML body — richer content, htmlToText handles it correctly
+    text = htmlToText(htmlBody);
+  } else if (plainBody) {
+    // Plain text: just clean up whitespace, no HTML to strip
+    text = plainBody.replace(/\r\n/g, "\n").replace(/\n{3,}/g, "\n\n").trim();
+  } else {
+    text = "";
+  }
+
   return {
     text,
     subject: data.subject || file.name,
