@@ -2053,6 +2053,8 @@ export default function BDPanel({ onCreatePost }: BDPanelProps) {
   const queuedIdsRef = useRef<Set<string>>(new Set());
   const pendingQueueRef = useRef<string[]>([]);
   const queueRunningRef = useRef(false);
+  const researchCountRef = useRef(0);       // calls made this page load
+  const [researchPaused, setResearchPaused] = useState(false);
   const [lastDetected, setLastDetected] = useState<string | null>(null);
 
   // Load existing data on mount
@@ -2074,12 +2076,13 @@ export default function BDPanel({ onCreatePost }: BDPanelProps) {
     }
   }, [leads]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  const researchLead = useCallback(async (lead: BDLead) => {
+  // Returns true if a rate-limit (429) was hit so drainQueue can back off
+  const researchLead = useCallback(async (lead: BDLead): Promise<boolean> => {
     setResearchingIds((prev) => new Set(prev).add(lead.id));
-    // Clear any prior failure so the spinner shows while retrying
     setFailedIds((prev) => { const next = new Set(prev); next.delete(lead.id); return next; });
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), 55000);
+    let rateLimited = false;
     try {
       const res = await fetch(`/api/bd/research/${lead.id}`, {
         method: "POST",
@@ -2087,9 +2090,14 @@ export default function BDPanel({ onCreatePost }: BDPanelProps) {
         body: JSON.stringify({ companyName: lead.companyName }),
         signal: controller.signal,
       });
+      if (res.status === 429) {
+        rateLimited = true;
+        setFailedIds((prev) => new Set(prev).add(lead.id));
+        return rateLimited;
+      }
       if (!res.ok) {
         setFailedIds((prev) => new Set(prev).add(lead.id));
-        return;
+        return rateLimited;
       }
       const data = await res.json();
       setLeads((prev) => prev.map((l) => (l.id === lead.id ? data.lead : l)));
@@ -2103,29 +2111,44 @@ export default function BDPanel({ onCreatePost }: BDPanelProps) {
         return next;
       });
     }
+    return rateLimited;
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   // Keep leadsRef current so drainQueue always sees the latest leads
   useEffect(() => { leadsRef.current = leads; }, [leads]);
 
-  // Drain the research queue one lead at a time, 5s between calls
+  const RESEARCH_MAX_PER_LOAD = 3;
+  const RESEARCH_GAP_MS = 15000;
+  const RESEARCH_BACKOFF_MS = 60000;
+
   const drainQueue = useCallback(async () => {
     if (queueRunningRef.current) return;
     queueRunningRef.current = true;
     while (pendingQueueRef.current.length > 0) {
-      const id = pendingQueueRef.current[0];
-      const lead = leadsRef.current.find((l) => l.id === id);
-      if (lead && !lead.researchedAt) {
-        await researchLead(lead);
+      // Pause after max calls per page load
+      if (researchCountRef.current >= RESEARCH_MAX_PER_LOAD) {
+        setResearchPaused(true);
+        queueRunningRef.current = false;
+        return;
       }
-      pendingQueueRef.current.shift();
+
+      const id = pendingQueueRef.current.shift()!;
+      const lead = leadsRef.current.find((l) => l.id === id);
+
+      // Skip: already researched, has existing brief, or previously failed
+      if (!lead || lead.researchedAt || lead.overview) continue;
+
+      researchCountRef.current += 1;
+      const rateLimited = await researchLead(lead);
+      const delayMs = rateLimited ? RESEARCH_BACKOFF_MS : RESEARCH_GAP_MS;
+
       if (pendingQueueRef.current.length > 0) {
-        await new Promise<void>((resolve) => setTimeout(resolve, 5000));
+        await new Promise<void>((resolve) => setTimeout(resolve, delayMs));
       }
     }
     queueRunningRef.current = false;
-  }, [researchLead]);
+  }, [researchLead]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Whenever leads change, enqueue any unresearched ones not yet queued
   useEffect(() => {
@@ -2162,6 +2185,12 @@ export default function BDPanel({ onCreatePost }: BDPanelProps) {
     } finally {
       setIsDetecting(false);
     }
+  };
+
+  const continueResearch = () => {
+    researchCountRef.current = 0;
+    setResearchPaused(false);
+    drainQueue();
   };
 
   const updateLead = (updated: BDLead) => {
@@ -2345,6 +2374,28 @@ export default function BDPanel({ onCreatePost }: BDPanelProps) {
               style={{ backgroundColor: "#FFF0F0", border: "1px solid #FFCCCC", color: "#CC4444" }}
             >
               <strong>Error:</strong> {detectError}
+            </div>
+          )}
+
+          {researchPaused && (
+            <div
+              className="mb-6 flex items-center justify-between gap-4 px-4 py-3 rounded-xl text-sm"
+              style={{ backgroundColor: "#FFFBEB", border: "1px solid #E8A838" }}
+            >
+              <span style={{ color: "#92400E" }}>
+                Research paused — {RESEARCH_MAX_PER_LOAD} calls made this session to stay within rate limits.
+              </span>
+              <button
+                onClick={continueResearch}
+                className="flex-shrink-0 text-xs px-3 py-1.5 rounded-lg font-semibold"
+                style={{
+                  backgroundColor: "#323B6A",
+                  color: "#FFFFFF",
+                  fontFamily: "var(--font-poppins), Poppins, sans-serif",
+                }}
+              >
+                Continue →
+              </button>
             </div>
           )}
 
