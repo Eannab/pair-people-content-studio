@@ -2047,6 +2047,12 @@ export default function BDPanel({ onCreatePost }: BDPanelProps) {
   const [isDetecting, setIsDetecting] = useState(false);
   const [detectError, setDetectError] = useState<string | null>(null);
   const [selectedLead, setSelectedLead] = useState<BDLead | null>(null);
+
+  // Research queue — refs so the drain loop always sees fresh state
+  const leadsRef = useRef<BDLead[]>([]);
+  const queuedIdsRef = useRef<Set<string>>(new Set());
+  const pendingQueueRef = useRef<string[]>([]);
+  const queueRunningRef = useRef(false);
   const [lastDetected, setLastDetected] = useState<string | null>(null);
 
   // Load existing data on mount
@@ -2068,7 +2074,7 @@ export default function BDPanel({ onCreatePost }: BDPanelProps) {
     }
   }, [leads]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  const researchLead = async (lead: BDLead) => {
+  const researchLead = useCallback(async (lead: BDLead) => {
     setResearchingIds((prev) => new Set(prev).add(lead.id));
     // Clear any prior failure so the spinner shows while retrying
     setFailedIds((prev) => { const next = new Set(prev); next.delete(lead.id); return next; });
@@ -2097,7 +2103,42 @@ export default function BDPanel({ onCreatePost }: BDPanelProps) {
         return next;
       });
     }
-  };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // Keep leadsRef current so drainQueue always sees the latest leads
+  useEffect(() => { leadsRef.current = leads; }, [leads]);
+
+  // Drain the research queue one lead at a time, 5s between calls
+  const drainQueue = useCallback(async () => {
+    if (queueRunningRef.current) return;
+    queueRunningRef.current = true;
+    while (pendingQueueRef.current.length > 0) {
+      const id = pendingQueueRef.current[0];
+      const lead = leadsRef.current.find((l) => l.id === id);
+      if (lead && !lead.researchedAt) {
+        await researchLead(lead);
+      }
+      pendingQueueRef.current.shift();
+      if (pendingQueueRef.current.length > 0) {
+        await new Promise<void>((resolve) => setTimeout(resolve, 5000));
+      }
+    }
+    queueRunningRef.current = false;
+  }, [researchLead]);
+
+  // Whenever leads change, enqueue any unresearched ones not yet queued
+  useEffect(() => {
+    const toQueue = leads
+      .filter((l) => !l.researchedAt && !queuedIdsRef.current.has(l.id))
+      .map((l) => l.id);
+    if (toQueue.length === 0) return;
+    for (const id of toQueue) {
+      queuedIdsRef.current.add(id);
+      pendingQueueRef.current.push(id);
+    }
+    drainQueue();
+  }, [leads, drainQueue]);
 
   const detectSignals = async () => {
     setIsDetecting(true);
@@ -2115,14 +2156,7 @@ export default function BDPanel({ onCreatePost }: BDPanelProps) {
       setLeads(newLeads);
       setMarketInsights(newInsights);
       setLastDetected(new Date().toISOString());
-
-      // Auto-research BD leads one at a time — wait for each to finish, 5s gap between
-      (async () => {
-        for (let i = 0; i < newLeads.length; i++) {
-          if (i > 0) await new Promise<void>((resolve) => setTimeout(resolve, 5000));
-          await researchLead(newLeads[i]);
-        }
-      })();
+      // Research is triggered automatically via the useEffect on leads
     } catch (err) {
       setDetectError(err instanceof Error ? err.message : "Detection failed");
     } finally {
