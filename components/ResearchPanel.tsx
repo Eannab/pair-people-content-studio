@@ -4,6 +4,7 @@ import React, { useState, useEffect, useCallback, useRef } from "react";
 import { useSession, signIn } from "next-auth/react";
 import type { CVCandidate } from "@/lib/cv-context";
 import type { LinkedInIntelligenceReport, LinkedInInsight } from "@/lib/linkedin-insights-context";
+import type { UserRole } from "@/lib/authorized-users";
 
 type Tab = "cv" | "linkedin";
 
@@ -681,11 +682,12 @@ function LinkedInIntelligenceTab() {
 
 // ── Main component ────────────────────────────────────────────────────────────
 
-export default function ResearchPanel() {
-  const [activeTab, setActiveTab] = useState<Tab>("cv");
+export default function ResearchPanel({ role }: { role?: UserRole }) {
+  const isViewer = role === "viewer";
+  const [activeTab, setActiveTab] = useState<Tab>(isViewer ? "linkedin" : "cv");
 
   const tabs: { id: Tab; label: string }[] = [
-    { id: "cv", label: "CV Intelligence" },
+    ...(!isViewer ? [{ id: "cv" as Tab, label: "CV Intelligence" }] : []),
     { id: "linkedin", label: "LinkedIn Intelligence" },
   ];
 

@@ -1,6 +1,7 @@
 import type { NextAuthOptions } from "next-auth";
 import AzureADProvider from "next-auth/providers/azure-ad";
 import type { JWT } from "next-auth/jwt";
+import { getUserRole, initializeUsersIfEmpty } from "@/lib/authorized-users";
 
 const tenantId = process.env.AZURE_AD_TENANT_ID;
 if (!tenantId) {
@@ -92,6 +93,8 @@ export const authOptions: NextAuthOptions = {
     async jwt({ token, account }) {
       // First sign-in: store all token data including the refresh token.
       if (account) {
+        await initializeUsersIfEmpty();
+        const role = await getUserRole(token.email ?? "");
         return {
           ...token,
           accessToken: account.access_token,
@@ -100,6 +103,8 @@ export const authOptions: NextAuthOptions = {
             : Date.now() + 3600 * 1000,
           refreshToken: account.refresh_token,
           error: undefined,
+          role,
+          isAuthorized: role !== null,
         };
       }
 
@@ -122,6 +127,8 @@ export const authOptions: NextAuthOptions = {
       session.accessToken = token.accessToken;
       // Bubble the error up to the client so it can prompt re-auth.
       session.error = token.error;
+      session.role = token.role;
+      session.isAuthorized = token.isAuthorized;
       return session;
     },
   },

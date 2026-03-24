@@ -2,12 +2,14 @@
 
 import React from "react";
 import { useSession, signOut } from "next-auth/react";
+import type { UserRole } from "@/lib/authorized-users";
 
 type Panel = "create" | "voice" | "performance" | "intelligence" | "research" | "bd";
 
 interface SidebarProps {
   activePanel: Panel;
   onPanelChange: (panel: Panel) => void;
+  role?: UserRole;
 }
 
 type NavGroup = {
@@ -93,10 +95,11 @@ const navGroups: NavGroup[] = [
   },
 ];
 
-export default function Sidebar({ activePanel, onPanelChange }: SidebarProps) {
+export default function Sidebar({ activePanel, onPanelChange, role }: SidebarProps) {
   const { data: session } = useSession();
   const userName = session?.user?.name ?? session?.user?.email?.split("@")[0] ?? "";
   const userInitial = userName ? userName.charAt(0).toUpperCase() : "?";
+  const isViewer = role === "viewer";
 
   return (
     <aside
@@ -127,48 +130,96 @@ export default function Sidebar({ activePanel, onPanelChange }: SidebarProps) {
 
       {/* Navigation */}
       <nav className="flex-1 px-4 py-6 space-y-5 overflow-y-auto">
-        {navGroups.map((group) => (
-          <div key={group.heading}>
+        {navGroups.map((group) => {
+          const items = isViewer
+            ? group.items.filter((item) => item.id !== "research")
+            : group.items;
+          if (items.length === 0) return null;
+          return (
+            <div key={group.heading}>
+              <p
+                className="text-xs uppercase tracking-widest mb-2 px-2"
+                style={{ color: "#A7B8D1", fontFamily: "var(--font-poppins), Poppins, sans-serif", fontWeight: 600 }}
+              >
+                {group.heading}
+              </p>
+              <ul className="space-y-0.5">
+                {items.map((item) => {
+                  const isActive = activePanel === item.id;
+                  return (
+                    <li key={item.id}>
+                      <button
+                        onClick={() => onPanelChange(item.id)}
+                        className="w-full flex items-center gap-3 px-3 py-2.5 rounded-lg transition-all duration-150 text-sm font-medium"
+                        style={{
+                          backgroundColor: isActive ? "#BDCF7C" : "transparent",
+                          color: isActive ? "#323B6A" : "#FFFFFF",
+                          fontFamily: "var(--font-poppins), Poppins, sans-serif",
+                          fontWeight: isActive ? 600 : 400,
+                        }}
+                        onMouseEnter={(e) => {
+                          if (!isActive)
+                            (e.currentTarget as HTMLButtonElement).style.backgroundColor = "rgba(255,255,255,0.08)";
+                        }}
+                        onMouseLeave={(e) => {
+                          if (!isActive)
+                            (e.currentTarget as HTMLButtonElement).style.backgroundColor = "transparent";
+                        }}
+                      >
+                        <span style={{ color: isActive ? "#323B6A" : "#A7B8D1" }}>
+                          {item.icon}
+                        </span>
+                        {item.label}
+                      </button>
+                    </li>
+                  );
+                })}
+              </ul>
+            </div>
+          );
+        })}
+
+        {/* Settings — admin only */}
+        {!isViewer && (
+          <div>
             <p
               className="text-xs uppercase tracking-widest mb-2 px-2"
               style={{ color: "#A7B8D1", fontFamily: "var(--font-poppins), Poppins, sans-serif", fontWeight: 600 }}
             >
-              {group.heading}
+              Admin
             </p>
             <ul className="space-y-0.5">
-              {group.items.map((item) => {
-                const isActive = activePanel === item.id;
-                return (
-                  <li key={item.id}>
-                    <button
-                      onClick={() => onPanelChange(item.id)}
-                      className="w-full flex items-center gap-3 px-3 py-2.5 rounded-lg transition-all duration-150 text-sm font-medium"
-                      style={{
-                        backgroundColor: isActive ? "#BDCF7C" : "transparent",
-                        color: isActive ? "#323B6A" : "#FFFFFF",
-                        fontFamily: "var(--font-poppins), Poppins, sans-serif",
-                        fontWeight: isActive ? 600 : 400,
-                      }}
-                      onMouseEnter={(e) => {
-                        if (!isActive)
-                          (e.currentTarget as HTMLButtonElement).style.backgroundColor = "rgba(255,255,255,0.08)";
-                      }}
-                      onMouseLeave={(e) => {
-                        if (!isActive)
-                          (e.currentTarget as HTMLButtonElement).style.backgroundColor = "transparent";
-                      }}
-                    >
-                      <span style={{ color: isActive ? "#323B6A" : "#A7B8D1" }}>
-                        {item.icon}
-                      </span>
-                      {item.label}
-                    </button>
-                  </li>
-                );
-              })}
+              <li>
+                <a
+                  href="/settings/users"
+                  className="w-full flex items-center gap-3 px-3 py-2.5 rounded-lg transition-all duration-150 text-sm font-medium"
+                  style={{
+                    backgroundColor: "transparent",
+                    color: "#FFFFFF",
+                    fontFamily: "var(--font-poppins), Poppins, sans-serif",
+                    fontWeight: 400,
+                    textDecoration: "none",
+                    display: "flex",
+                  }}
+                  onMouseEnter={(e) => {
+                    (e.currentTarget as HTMLAnchorElement).style.backgroundColor = "rgba(255,255,255,0.08)";
+                  }}
+                  onMouseLeave={(e) => {
+                    (e.currentTarget as HTMLAnchorElement).style.backgroundColor = "transparent";
+                  }}
+                >
+                  <span style={{ color: "#A7B8D1" }}>
+                    <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
+                        d="M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0z" />
+                    </svg>
+                  </span>
+                  Users
+                </a>
+              </li>
             </ul>
           </div>
-        ))}
+        )}
       </nav>
 
       {/* Footer — user + logout */}
@@ -181,12 +232,28 @@ export default function Sidebar({ activePanel, onPanelChange }: SidebarProps) {
             >
               {userInitial}
             </div>
-            <span
-              className="text-sm truncate"
-              style={{ color: "#E7EDF3", fontFamily: "var(--font-poppins), Poppins, sans-serif", fontWeight: 500 }}
-            >
-              {userName}
-            </span>
+            <div className="flex flex-col min-w-0">
+              <span
+                className="text-sm truncate"
+                style={{ color: "#E7EDF3", fontFamily: "var(--font-poppins), Poppins, sans-serif", fontWeight: 500 }}
+              >
+                {userName}
+              </span>
+              {isViewer && (
+                <span
+                  className="text-xs px-1.5 py-0.5 rounded mt-0.5 self-start"
+                  style={{
+                    backgroundColor: "rgba(255,255,255,0.12)",
+                    color: "#A7B8D1",
+                    fontFamily: "var(--font-poppins), Poppins, sans-serif",
+                    fontWeight: 600,
+                    lineHeight: 1,
+                  }}
+                >
+                  Viewer
+                </span>
+              )}
+            </div>
           </div>
         )}
         <button

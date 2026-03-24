@@ -4,10 +4,12 @@ import React, { useState, useEffect, useRef } from "react";
 import { useSession, signIn, signOut } from "next-auth/react";
 import type { ScoredArticle } from "@/app/api/newsletters/scan/route";
 import type { NewsletterSender } from "@/app/api/newsletters/senders/route";
+import type { UserRole } from "@/lib/authorized-users";
 
 interface Props {
   onUseForPost: (article: ScoredArticle) => void;
   onNavigateToBD?: () => void;
+  role?: UserRole;
 }
 
 type ScanState = "idle" | "scanning" | "done" | "error";
@@ -1077,18 +1079,23 @@ function AddArticlesTab({
 
 // ── Main panel ───────────────────────────────────────────────────────────────
 
-export default function IntelligencePanel({ onUseForPost, onNavigateToBD }: Props) {
+export default function IntelligencePanel({ onUseForPost, onNavigateToBD, role }: Props) {
   const { data: session, status } = useSession();
   const [tab, setTab] = useState<Tab>("insight");
 
   const isLoading = status === "loading";
   const isConnected = status === "authenticated";
+  const isViewer = role === "viewer";
 
   const TAB_LABELS: Record<Tab, string> = {
     insight: "Market Insight",
     sources: "Newsletter Sources",
     manual: "Add Articles",
   };
+
+  const visibleTabs: Tab[] = isViewer
+    ? (["insight", "sources"] as Tab[])
+    : (["insight", "sources", "manual"] as Tab[]);
 
   return (
     <div className="max-w-3xl mx-auto px-6 py-8">
@@ -1138,7 +1145,7 @@ export default function IntelligencePanel({ onUseForPost, onNavigateToBD }: Prop
 
           {/* Tabs — always visible */}
           <div className="flex border-b mb-6" style={{ borderColor: "#E7EDF3" }}>
-            {(["insight", "sources", "manual"] as Tab[]).map((t) => (
+            {visibleTabs.map((t) => (
               <button
                 key={t}
                 onClick={() => setTab(t)}

@@ -4,6 +4,7 @@ import React, { useState, useEffect, useRef, useCallback } from "react";
 import type { BDLead, CompanySignal, MarketInsightSignal } from "@/app/api/bd/signals/route";
 import type { PipelineLead } from "@/app/api/bd/pipeline/route";
 import type { CVMatch } from "@/lib/cv-context";
+import type { UserRole } from "@/lib/authorized-users";
 
 // ── Sub-components ────────────────────────────────────────────────────────────
 
@@ -563,11 +564,13 @@ interface LeadDetailProps {
   lead: BDLead;
   onBack: () => void;
   onLeadUpdate?: (updated: BDLead) => void;
+  role?: UserRole;
 }
 
 type Channel = "email" | "linkedin" | "text";
 
-function LeadDetail({ lead, onBack, onLeadUpdate }: LeadDetailProps) {
+function LeadDetail({ lead, onBack, onLeadUpdate, role }: LeadDetailProps) {
+  const isViewer = role === "viewer";
   const [channel, setChannel] = useState<Channel>("email");
   const [drafts, setDrafts] = useState<Record<string, string>>({});
   const [subjects, setSubjects] = useState<Record<string, string>>({});
@@ -1050,9 +1053,9 @@ function LeadDetail({ lead, onBack, onLeadUpdate }: LeadDetailProps) {
                     setActiveDraftType(type);
                     return;
                   }
-                  generateDraft(type);
+                  if (!isViewer) generateDraft(type);
                 }}
-                onDoubleClick={() => generateDraft(type)}
+                onDoubleClick={() => { if (!isViewer) generateDraft(type); }}
                 disabled={isThisDrafting}
                 title={isActive ? (hasDraft ? "Double-click to regenerate" : `Generate ${label} email`) : `Switch to ${label}`}
                 className="flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-lg transition-all"
@@ -1087,33 +1090,35 @@ function LeadDetail({ lead, onBack, onLeadUpdate }: LeadDetailProps) {
               </button>
             );
           })}
-          {/* Generate / Regenerate button for active type */}
-          <button
-            onClick={() => generateDraft(activeDraftType)}
-            disabled={isDrafting}
-            className="flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-lg ml-auto"
-            style={{
-              backgroundColor: isDrafting ? "#E7EDF3" : "#BDCF7C",
-              color: isDrafting ? "#A7B8D1" : "#323B6A",
-              fontFamily: "var(--font-poppins), Poppins, sans-serif",
-              fontWeight: 600,
-              cursor: isDrafting ? "not-allowed" : "pointer",
-            }}
-          >
-            {isDrafting ? (
-              <>
-                <svg className="w-3.5 h-3.5 animate-spin" fill="none" viewBox="0 0 24 24">
-                  <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
-                  <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
-                </svg>
-                Drafting...
-              </>
-            ) : activeDraft ? (
-              "Regenerate"
-            ) : (
-              "Generate"
-            )}
-          </button>
+          {/* Generate / Regenerate button for active type — admin only */}
+          {!isViewer && (
+            <button
+              onClick={() => generateDraft(activeDraftType)}
+              disabled={isDrafting}
+              className="flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-lg ml-auto"
+              style={{
+                backgroundColor: isDrafting ? "#E7EDF3" : "#BDCF7C",
+                color: isDrafting ? "#A7B8D1" : "#323B6A",
+                fontFamily: "var(--font-poppins), Poppins, sans-serif",
+                fontWeight: 600,
+                cursor: isDrafting ? "not-allowed" : "pointer",
+              }}
+            >
+              {isDrafting ? (
+                <>
+                  <svg className="w-3.5 h-3.5 animate-spin" fill="none" viewBox="0 0 24 24">
+                    <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                    <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+                  </svg>
+                  Drafting...
+                </>
+              ) : activeDraft ? (
+                "Regenerate"
+              ) : (
+                "Generate"
+              )}
+            </button>
+          )}
         </div>
 
         {/* ── Matched candidate (internal, candidate mode only) ── */}
@@ -1211,19 +1216,21 @@ function LeadDetail({ lead, onBack, onLeadUpdate }: LeadDetailProps) {
                             <span className="text-xs" style={{ color: "#A7B8D1" }}>
                               {match.score}/10
                             </span>
-                            <button
-                              onClick={() => generateDraft("candidate", idx)}
-                              disabled={isDrafting}
-                              className="text-xs px-2.5 py-1.5 rounded-lg font-semibold transition-all"
-                              style={{
-                                backgroundColor: isDrafting ? "#E7EDF3" : "#323B6A",
-                                color: isDrafting ? "#A7B8D1" : "#FFFFFF",
-                                fontFamily: "var(--font-poppins), Poppins, sans-serif",
-                                cursor: isDrafting ? "not-allowed" : "pointer",
-                              }}
-                            >
-                              {isDrafting ? "…" : "Use instead"}
-                            </button>
+                            {!isViewer && (
+                              <button
+                                onClick={() => generateDraft("candidate", idx)}
+                                disabled={isDrafting}
+                                className="text-xs px-2.5 py-1.5 rounded-lg font-semibold transition-all"
+                                style={{
+                                  backgroundColor: isDrafting ? "#E7EDF3" : "#323B6A",
+                                  color: isDrafting ? "#A7B8D1" : "#FFFFFF",
+                                  fontFamily: "var(--font-poppins), Poppins, sans-serif",
+                                  cursor: isDrafting ? "not-allowed" : "pointer",
+                                }}
+                              >
+                                {isDrafting ? "…" : "Use instead"}
+                              </button>
+                            )}
                           </div>
                         </div>
                       );
@@ -1713,10 +1720,13 @@ const STATUS_META: Record<
 function PipelineRow({
   lead: initial,
   onViewBrief,
+  role,
 }: {
   lead: PipelineLead;
   onViewBrief: () => void;
+  role?: UserRole;
 }) {
+  const isViewer = role === "viewer";
   const [lead, setLead] = useState(initial);
   const [localNotes, setLocalNotes] = useState(initial.notes);
   const [saved, setSaved] = useState(false);
@@ -1838,43 +1848,54 @@ function PipelineRow({
             ✓
           </span>
         )}
-        <select
-          value={lead.status}
-          onChange={handleStatusChange}
-          className="text-xs px-2 py-2 rounded-lg outline-none flex-shrink-0 font-semibold"
-          style={{
-            backgroundColor: sm.bg,
-            color: sm.color,
-            border: "none",
-            fontFamily: "var(--font-poppins), Poppins, sans-serif",
-            cursor: "pointer",
-          }}
-        >
-          {(Object.keys(STATUS_META) as PipelineLead["status"][]).map((s) => (
-            <option key={s} value={s}>
-              {STATUS_META[s].label}
-            </option>
-          ))}
-        </select>
-        <button
-          onClick={handleDelete}
-          className="w-7 h-7 flex items-center justify-center rounded-lg flex-shrink-0 transition-colors"
-          style={{ color: "#A7B8D1" }}
-          onMouseEnter={(e) => {
-            (e.currentTarget as HTMLButtonElement).style.backgroundColor = "#FFF0F0";
-            (e.currentTarget as HTMLButtonElement).style.color = "#CC4444";
-          }}
-          onMouseLeave={(e) => {
-            (e.currentTarget as HTMLButtonElement).style.backgroundColor = "transparent";
-            (e.currentTarget as HTMLButtonElement).style.color = "#A7B8D1";
-          }}
-          title="Remove from pipeline"
-        >
-          <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
-              d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
-          </svg>
-        </button>
+        {isViewer ? (
+          <span
+            className="text-xs px-2 py-2 rounded-lg flex-shrink-0 font-semibold"
+            style={{ backgroundColor: sm.bg, color: sm.color, fontFamily: "var(--font-poppins), Poppins, sans-serif" }}
+          >
+            {STATUS_META[lead.status].label}
+          </span>
+        ) : (
+          <select
+            value={lead.status}
+            onChange={handleStatusChange}
+            className="text-xs px-2 py-2 rounded-lg outline-none flex-shrink-0 font-semibold"
+            style={{
+              backgroundColor: sm.bg,
+              color: sm.color,
+              border: "none",
+              fontFamily: "var(--font-poppins), Poppins, sans-serif",
+              cursor: "pointer",
+            }}
+          >
+            {(Object.keys(STATUS_META) as PipelineLead["status"][]).map((s) => (
+              <option key={s} value={s}>
+                {STATUS_META[s].label}
+              </option>
+            ))}
+          </select>
+        )}
+        {!isViewer && (
+          <button
+            onClick={handleDelete}
+            className="w-7 h-7 flex items-center justify-center rounded-lg flex-shrink-0 transition-colors"
+            style={{ color: "#A7B8D1" }}
+            onMouseEnter={(e) => {
+              (e.currentTarget as HTMLButtonElement).style.backgroundColor = "#FFF0F0";
+              (e.currentTarget as HTMLButtonElement).style.color = "#CC4444";
+            }}
+            onMouseLeave={(e) => {
+              (e.currentTarget as HTMLButtonElement).style.backgroundColor = "transparent";
+              (e.currentTarget as HTMLButtonElement).style.color = "#A7B8D1";
+            }}
+            title="Remove from pipeline"
+          >
+            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
+                d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+            </svg>
+          </button>
+        )}
       </div>
     </div>
   );
@@ -1882,9 +1903,12 @@ function PipelineRow({
 
 function PipelineTab({
   onViewBrief,
+  role,
 }: {
   onViewBrief: (companyId: string | undefined, companyName: string) => void;
+  role?: UserRole;
 }) {
+  const isViewer = role === "viewer";
   const [pipeline, setPipeline] = useState<PipelineLead[]>([]);
   const [showDismissed, setShowDismissed] = useState(false);
   const [loading, setLoading] = useState(true);
@@ -1978,9 +2002,9 @@ function PipelineTab({
               Pipeline is empty
             </p>
             <p className="text-sm mb-4" style={{ color: "#A7B8D1" }}>
-              Detect signals in the Digest tab to add leads automatically, or add one manually.
+              {isViewer ? "No pipeline leads yet." : "Detect signals in the Digest tab to add leads automatically, or add one manually."}
             </p>
-            <AddLeadButton />
+            {!isViewer && <AddLeadButton />}
           </div>
         </div>
       ) : (
@@ -2000,7 +2024,7 @@ function PipelineTab({
                   </span>
                 ))}
             </div>
-            <AddLeadButton />
+            {!isViewer && <AddLeadButton />}
           </div>
 
           {/* Lead rows */}
@@ -2010,6 +2034,7 @@ function PipelineTab({
                 key={lead.id}
                 lead={lead}
                 onViewBrief={() => onViewBrief(lead.companyId, lead.companyName)}
+                role={role}
               />
             ))}
           </div>
@@ -2036,9 +2061,11 @@ function PipelineTab({
 
 interface BDPanelProps {
   onCreatePost?: (context: string) => void;
+  role?: UserRole;
 }
 
-export default function BDPanel({ onCreatePost }: BDPanelProps) {
+export default function BDPanel({ onCreatePost, role }: BDPanelProps) {
+  const isViewer = role === "viewer";
   const [activeTab, setActiveTab] = useState<"digest" | "pipeline">("digest");
   const [leads, setLeads] = useState<BDLead[]>([]);
   const [marketInsights, setMarketInsights] = useState<MarketInsightSignal[]>([]);
@@ -2203,6 +2230,7 @@ export default function BDPanel({ onCreatePost }: BDPanelProps) {
         lead={selectedLead}
         onBack={() => setSelectedLead(null)}
         onLeadUpdate={updateLead}
+        role={role}
       />
     );
   }
@@ -2252,6 +2280,7 @@ export default function BDPanel({ onCreatePost }: BDPanelProps) {
       {/* Pipeline tab */}
       {activeTab === "pipeline" && (
         <PipelineTab
+          role={role}
           onViewBrief={async (companyId, companyName) => {
             // Try local state first
             const found = leads.find(
@@ -2322,50 +2351,52 @@ export default function BDPanel({ onCreatePost }: BDPanelProps) {
                 </p>
               )}
             </div>
-            <div className="flex gap-2">
-              {!isEmpty && (
-                <button
-                  onClick={() => {
-                    setLeads([]);
-                    setMarketInsights([]);
-                    fetch("/api/bd/leads", { method: "DELETE" }).catch(() => {});
-                  }}
-                  className="text-xs px-3 py-2 rounded-xl transition-all"
-                  style={{ color: "#A7B8D1", backgroundColor: "#E7EDF3" }}
-                >
-                  Clear
-                </button>
-              )}
-              <button
-                onClick={detectSignals}
-                disabled={isDetecting}
-                className="flex items-center gap-2 px-4 py-2.5 rounded-xl text-sm font-semibold transition-all"
-                style={{
-                  backgroundColor: isDetecting ? "#E7EDF3" : "#323B6A",
-                  color: isDetecting ? "#A7B8D1" : "#FFFFFF",
-                  fontFamily: "var(--font-poppins), Poppins, sans-serif",
-                  cursor: isDetecting ? "not-allowed" : "pointer",
-                  boxShadow: isDetecting ? "none" : "0 4px 12px rgba(50, 59, 106, 0.3)",
-                }}
-              >
-                {isDetecting ? (
-                  <>
-                    <svg className="w-4 h-4 animate-spin" fill="none" viewBox="0 0 24 24">
-                      <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
-                      <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
-                    </svg>
-                    Detecting...
-                  </>
-                ) : (
-                  <>
-                    <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 10V3L4 14h7v7l9-11h-7z" />
-                    </svg>
-                    {!isEmpty ? "Re-scan" : "Detect Signals"}
-                  </>
+            {!isViewer && (
+              <div className="flex gap-2">
+                {!isEmpty && (
+                  <button
+                    onClick={() => {
+                      setLeads([]);
+                      setMarketInsights([]);
+                      fetch("/api/bd/leads", { method: "DELETE" }).catch(() => {});
+                    }}
+                    className="text-xs px-3 py-2 rounded-xl transition-all"
+                    style={{ color: "#A7B8D1", backgroundColor: "#E7EDF3" }}
+                  >
+                    Clear
+                  </button>
                 )}
-              </button>
-            </div>
+                <button
+                  onClick={detectSignals}
+                  disabled={isDetecting}
+                  className="flex items-center gap-2 px-4 py-2.5 rounded-xl text-sm font-semibold transition-all"
+                  style={{
+                    backgroundColor: isDetecting ? "#E7EDF3" : "#323B6A",
+                    color: isDetecting ? "#A7B8D1" : "#FFFFFF",
+                    fontFamily: "var(--font-poppins), Poppins, sans-serif",
+                    cursor: isDetecting ? "not-allowed" : "pointer",
+                    boxShadow: isDetecting ? "none" : "0 4px 12px rgba(50, 59, 106, 0.3)",
+                  }}
+                >
+                  {isDetecting ? (
+                    <>
+                      <svg className="w-4 h-4 animate-spin" fill="none" viewBox="0 0 24 24">
+                        <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                        <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+                      </svg>
+                      Detecting...
+                    </>
+                  ) : (
+                    <>
+                      <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 10V3L4 14h7v7l9-11h-7z" />
+                      </svg>
+                      {!isEmpty ? "Re-scan" : "Detect Signals"}
+                    </>
+                  )}
+                </button>
+              </div>
+            )}
           </div>
 
           {detectError && (

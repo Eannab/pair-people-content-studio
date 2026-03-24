@@ -1,7 +1,7 @@
 "use client";
 
 import React, { useState } from "react";
-import { useSession, signIn } from "next-auth/react";
+import { useSession, signIn, signOut } from "next-auth/react";
 import Sidebar from "@/components/Sidebar";
 import CreatePanel from "@/components/CreatePanel";
 import VoicePanel from "@/components/VoicePanel";
@@ -10,6 +10,7 @@ import IntelligencePanel from "@/components/IntelligencePanel";
 import ResearchPanel from "@/components/ResearchPanel";
 import BDPanel from "@/components/BDPanel";
 import type { ScoredArticle } from "@/app/api/newsletters/scan/route";
+import type { UserRole } from "@/lib/authorized-users";
 
 type Panel = "create" | "voice" | "performance" | "intelligence" | "research" | "bd";
 
@@ -95,10 +96,71 @@ export default function Home() {
     );
   }
 
+  if (session.isAuthorized === false) {
+    return (
+      <div
+        className="flex items-center justify-center min-h-screen"
+        style={{ backgroundColor: "#E7EDF3" }}
+      >
+        <div className="text-center max-w-sm px-6">
+          <div className="mb-6">
+            <p
+              className="text-2xl"
+              style={{
+                fontFamily: "var(--font-poppins), Poppins, sans-serif",
+                fontWeight: 700,
+                color: "#323B6A",
+              }}
+            >
+              Pair People
+            </p>
+            <p
+              className="text-base mt-1"
+              style={{
+                fontFamily: "var(--font-poppins), Poppins, sans-serif",
+                fontWeight: 600,
+                color: "#BDCF7C",
+              }}
+            >
+              Content Studio
+            </p>
+          </div>
+          <div
+            className="rounded-2xl p-8 mb-4"
+            style={{ backgroundColor: "#FFFFFF", border: "1.5px solid #E7EDF3" }}
+          >
+            <p
+              className="text-base font-semibold mb-2"
+              style={{
+                fontFamily: "var(--font-poppins), Poppins, sans-serif",
+                color: "#323B6A",
+              }}
+            >
+              Access Denied
+            </p>
+            <p className="text-sm" style={{ color: "#6F92BF" }}>
+              Your account ({session.user?.email}) is not authorised to access this app.
+              Contact Eanna for access.
+            </p>
+          </div>
+          <button
+            onClick={() => signOut({ callbackUrl: "/api/auth/signin" })}
+            className="text-sm"
+            style={{ color: "#A7B8D1" }}
+          >
+            Sign out
+          </button>
+        </div>
+      </div>
+    );
+  }
+
+  const role: UserRole = session.role ?? "viewer";
+
   return (
     <div className="flex min-h-screen" style={{ backgroundColor: "#E7EDF3" }}>
       {/* Sidebar */}
-      <Sidebar activePanel={activePanel} onPanelChange={setActivePanel} />
+      <Sidebar activePanel={activePanel} onPanelChange={setActivePanel} role={role} />
 
       {/* Main content */}
       <main
@@ -117,10 +179,11 @@ export default function Home() {
           <IntelligencePanel
             onUseForPost={handleUseForPost}
             onNavigateToBD={() => setActivePanel("bd")}
+            role={role}
           />
         )}
-        {activePanel === "research" && <ResearchPanel />}
-        {activePanel === "bd" && <BDPanel onCreatePost={handleCreatePostFromBD} />}
+        {activePanel === "research" && role !== "viewer" && <ResearchPanel role={role} />}
+        {activePanel === "bd" && <BDPanel onCreatePost={handleCreatePostFromBD} role={role} />}
       </main>
     </div>
   );
