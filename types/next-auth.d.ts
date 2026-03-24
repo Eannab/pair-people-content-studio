@@ -18,5 +18,6 @@ declare module "next-auth/jwt" {
     error?: "RefreshAccessTokenError";
     role?: UserRole | null;
     isAuthorized?: boolean;
+    upn?: string;
   }
 }

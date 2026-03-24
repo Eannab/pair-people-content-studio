@@ -93,8 +93,17 @@ export const authOptions: NextAuthOptions = {
     async jwt({ token, account }) {
       // First sign-in: store all token data including the refresh token.
       if (account) {
-        await initializeUsersIfEmpty();
-        const role = await getUserRole(token.email ?? "");
+        // Azure AD may surface email as token.email or token.upn or inside profile
+        const email = (token.email ?? token.upn ?? "") as string;
+        console.log("[next-auth] First sign-in, looking up role for:", email);
+        let role = null;
+        try {
+          await initializeUsersIfEmpty();
+          role = await getUserRole(email);
+          console.log("[next-auth] Role resolved:", role);
+        } catch (err) {
+          console.error("[next-auth] KV role lookup failed, defaulting to unauthorized:", err);
+        }
         return {
           ...token,
           accessToken: account.access_token,
