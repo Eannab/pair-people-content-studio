@@ -131,9 +131,7 @@ export default function Sidebar({ activePanel, onPanelChange, role }: SidebarPro
       {/* Navigation */}
       <nav className="flex-1 px-4 py-6 space-y-5 overflow-y-auto">
         {navGroups.map((group) => {
-          const items = isViewer
-            ? group.items.filter((item) => item.id !== "research")
-            : group.items;
+          const items = group.items;
           if (items.length === 0) return null;
           return (
             <div key={group.heading}>

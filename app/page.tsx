@@ -182,7 +182,7 @@ export default function Home() {
             role={role}
           />
         )}
-        {activePanel === "research" && role !== "viewer" && <ResearchPanel role={role} />}
+        {activePanel === "research" && <ResearchPanel role={role} />}
         {activePanel === "bd" && <BDPanel onCreatePost={handleCreatePostFromBD} role={role} />}
       </main>
     </div>
